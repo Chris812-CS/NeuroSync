@@ -64,6 +64,12 @@ st.markdown(f"""
 }}
 [data-testid="stSidebar"] * {{ color: {PALE} !important; }}
 h1, h2, h3 {{ color: {NAVY}; }}
+[data-testid="stDataFrame"] div[role="columnheader"] {{
+    color: white !important;
+}}
+[data-testid="stDataFrame"] div[role="columnheader"] * {{
+    color: white !important;
+}}
 .metric-card {{
     background: white; border-radius: 10px; padding: 14px 18px;
     border-left: 5px solid {TEAL}; box-shadow: 0 1px 3px rgba(11,61,92,0.08);
