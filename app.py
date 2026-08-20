@@ -271,6 +271,10 @@ with tab_overview:
         if bic_scores:
             bic_df = pd.DataFrame({"k": list(bic_scores.keys()), "BIC": list(bic_scores.values())})
             st.bar_chart(bic_df.set_index("k"), color=TEAL)
+        st.markdown("**Cluster membership confidence**")
+        st.caption("Each row is one session; each cluster_N column is the model's estimated probability "
+                   "that session belongs to that cluster (rows sum to 1). `assigned_cluster` is just the "
+                   "highest-probability cluster for that session. Fit blind to filename labels.")
         st.dataframe(cluster_probs, use_container_width=True)
     with c2:
         st.markdown("**Cluster feature profiles**")
