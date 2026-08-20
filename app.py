@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 
 import csi_cvi_pipeline as pl
 
-DEFAULT_DATA_DIR = r"C:\Users\Chris Teo\OneDrive\Documents\Projects\NeuroGaze+rPPG\data\testing data"
+DEFAULT_DATA_DIR = str(Path(__file__).parent / "testing data")
 
 # ------------------------------------------------------------------
 # Palette -- reused from the notebook's own NeuroSync chart styling
@@ -111,13 +111,6 @@ with st.sidebar:
     )
 
     data_dir_str = DEFAULT_DATA_DIR
-    with st.expander("Data folder", expanded=False):
-        data_dir_str = st.text_input(
-            "Path", value=DEFAULT_DATA_DIR,
-            help="Folder containing session CSVs -- every .csv directly inside it is picked up "
-                 "automatically, same as DATA_DIR in the notebook.",
-        )
-        refresh = st.button("🔄 Reload folder", use_container_width=True)
 
     st.markdown("### Tunables")
     with st.expander("Signal-processing window", expanded=False):
@@ -198,9 +191,6 @@ def style_pool_table(annotated_df, z_df):
     return annotated_df.style.apply(styler, axis=None)
 
 
-if refresh:
-    process_sessions.clear()
-
 if not data_dir_str:
     st.title("CSI/CVI Unknown-Group Dashboard")
     st.info("Enter a data folder path in the sidebar to get started.")
@@ -209,7 +199,8 @@ if not data_dir_str:
 data_dir = Path(data_dir_str)
 if not data_dir.exists() or not data_dir.is_dir():
     st.title("CSI/CVI Unknown-Group Dashboard")
-    st.error(f"Folder not found: `{data_dir_str}`. Check the path in the sidebar.")
+    st.error(f"Folder not found: `{data_dir_str}`. Make sure the `testing data/` folder "
+             f"sits next to `app.py` in the repo.")
     st.stop()
 
 csv_paths = sorted(data_dir.glob("*.csv"))
