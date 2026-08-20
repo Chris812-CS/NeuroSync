@@ -306,6 +306,11 @@ with tab_overview:
         with cc2:
             st.markdown("**Cross-tab: cluster vs. filename group**")
             st.dataframe(crosscheck, use_container_width=True)
+            legend_lines = []
+            for col in prob_cols:
+                lean = cluster_group_lean.get(col, "?")
+                legend_lines.append(f"*{col}: leans **{lean}** -- {cluster_profiles[col]}*")
+            st.caption("  \n".join(legend_lines))
 
         st.markdown("#### Hidden flag-ratios vs. revealed group")
         flag_ratio_by_group = session_long[["participant", "adhd_flag_ratio", "autism_flag_ratio"]].copy()
