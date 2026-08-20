@@ -121,8 +121,8 @@ with st.sidebar:
         rel_tol = st.slider("Within-session flag tolerance", 0.01, 0.10, pl.REL_TOL, 0.01)
         max_clusters = st.slider("Max clusters tried (BIC)", 2, 6, pl.MAX_CLUSTERS, 1)
 
-    reveal = st.toggle("🔓 Reveal filename-derived groups", value=False,
-                        help="Mirrors the notebook's final reveal section -- off by default.")
+    reveal = st.toggle("🔓 Reveal filename-derived groups", value=True,
+                        help="Mirrors the notebook's final reveal section -- on by default.")
 
 tunables = {"CSI_CVI_WINDOW_SEC": window_sec, "GAP_THRESHOLD_SEC": gap_threshold, "SETTLE_SEC": settle_sec}
 
