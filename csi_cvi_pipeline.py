@@ -591,51 +591,89 @@ def explain_cluster_assignment(gmm, X_ai, cluster_probs, sess_id, top_n=5):
 # ------------------------------------------------------------------
 # Recommendation signals + text
 # ------------------------------------------------------------------
+#
+# Task reference (for anyone reading these functions later):
+#   RESTING  -> participant watches a YouTube video, no auditory/response task.
+#   PASSIVE  -> same video continues; background oddball tones play every ~700ms
+#               (500Hz standard / 450Hz rare deviant, ~20% of tones).
+#   ACTIVE   -> gap-overlap / response-conflict task, up to 5 min:
+#               a circle cue appears (green = congruent/"low" difficulty: press
+#               the button on the SAME side as the star that appears 1.5s later;
+#               red = incongruent/"high" difficulty: press the OPPOSITE side).
+#               Cue color is currently randomized 50/50 per trial.
+#   Phase transitions (RESTING->PASSIVE at the 3-min video mark, PASSIVE->ACTIVE
+#   when the video ends) each trigger a 5-second pre/post RMSSD & BPM capture.
+#   Distractor zones are optional screen regions registered via
+#   NeuroGazeAPI.setDistractorZones() before Start is clicked; if never called,
+#   no zone data is recorded.
+# ------------------------------------------------------------------
+
 def signal_decline_point(dfs, window_trials=5, decline_frac=0.15):
+    """Looks for a sustained drop in ACTIVE-phase (response-conflict task)
+    accuracy, using the participant's own first-window accuracy as baseline.
+    Always returns a dict (never None) so the caller can explain *why* no
+    decline was found, not just that one wasn't."""
     log = dfs.get("conflict_task_log")
     if log is None or log.empty or "elapsed_sec" not in log.columns:
-        return None
+        return {"status": "no_task_data"}
 
     df = log.copy()
     df["elapsed_sec"] = pd.to_numeric(df["elapsed_sec"], errors="coerce")
     df["correct"] = df["correct"].astype(str).str.lower().isin(["true", "1"])
     df = df.dropna(subset=["elapsed_sec"]).sort_values("elapsed_sec").reset_index(drop=True)
 
-    if len(df) < window_trials * 2:
-        return None
+    n_trials = len(df)
+    if n_trials < window_trials * 2:
+        return {"status": "insufficient_trials", "n_trials": n_trials, "min_required": window_trials * 2}
 
     df["rolling_acc"] = df["correct"].rolling(window_trials, min_periods=window_trials).mean()
     baseline_acc = df["correct"].iloc[:window_trials].mean()
+    total_duration_sec = df["elapsed_sec"].iloc[-1]
 
     threshold = baseline_acc - decline_frac
     below = df["rolling_acc"] < threshold
     if not below.any():
-        return None
+        return {
+            "status": "stable", "n_trials": n_trials,
+            "baseline_accuracy": round(baseline_acc, 3),
+            "total_duration_sec": round(total_duration_sec, 1),
+        }
 
     first_idx = below.idxmax()
     if below.loc[first_idx:].mean() < 0.5:
-        return None
+        return {
+            "status": "stable", "n_trials": n_trials,
+            "baseline_accuracy": round(baseline_acc, 3),
+            "total_duration_sec": round(total_duration_sec, 1),
+        }
 
     return {
+        "status": "declined",
+        "n_trials": n_trials,
         "baseline_accuracy": round(baseline_acc, 3),
         "decline_elapsed_sec": round(df.loc[first_idx, "elapsed_sec"], 1),
         "decline_accuracy": round(df.loc[first_idx, "rolling_acc"], 3),
+        "total_duration_sec": round(total_duration_sec, 1),
     }
 
 
 def signal_difficulty_sensitivity(dfs):
+    """Compares accuracy on green/congruent (low) vs red/incongruent (high)
+    response-conflict trials, and how many of each were logged."""
     log = dfs.get("conflict_task_log")
     if log is None or log.empty or "difficulty" not in log.columns:
         return None
     df = log.copy()
     df["correct"] = df["correct"].astype(str).str.lower().isin(["true", "1"])
-    by_diff = df.groupby("difficulty")["correct"].mean()
+    by_diff = df.groupby("difficulty")["correct"].agg(["mean", "count"])
     if "low" not in by_diff.index or "high" not in by_diff.index:
         return None
     return {
-        "acc_low_difficulty": round(by_diff["low"], 3),
-        "acc_high_difficulty": round(by_diff["high"], 3),
-        "gap": round(by_diff["low"] - by_diff["high"], 3),
+        "acc_low_difficulty": round(by_diff.loc["low", "mean"], 3),
+        "acc_high_difficulty": round(by_diff.loc["high", "mean"], 3),
+        "n_low": int(by_diff.loc["low", "count"]),
+        "n_high": int(by_diff.loc["high", "count"]),
+        "gap": round(by_diff.loc["low", "mean"] - by_diff.loc["high", "mean"], 3),
     }
 
 
@@ -688,53 +726,159 @@ def signal_distraction(dfs):
     return {"zone": top["zone"], "fraction_of_zone_time": round(top["fraction_of_zone_time"], 3)}
 
 
+# --- recommendation text -------------------------------------------------
+
+_TASK_DESC = (
+    "the gap-overlap response-conflict task (ACTIVE phase, up to 5 min): a colored "
+    "circle appears, then 1.5s later a star appears on the left or right, with a "
+    "1.5s window to respond and a 0.5s gap before the next trial"
+)
+
+
 def recommend_session_length(sig):
-    if sig is None:
-        return "Session length: no clear decline point detected this session (either performance stayed stable, or there wasn't enough trial data)."
-    return (f"Session length / break timing: performance held steady for the first "
-            f"~{sig['decline_elapsed_sec'] / 60:.1f} min (accuracy ~{sig['baseline_accuracy']:.0%}), "
-            f"then rolling accuracy dropped to ~{sig['decline_accuracy']:.0%}. "
-            f"Recommend structuring sessions in ~{max(5, round(sig['decline_elapsed_sec'] / 60)):.0f}-minute "
-            f"blocks with a short break between.")
+    if sig["status"] == "no_task_data":
+        return (f"Session length: no response-conflict trials were recorded this session, so break timing "
+                f"can't be assessed from {_TASK_DESC}. Make sure the ACTIVE phase is marked/reached before stopping.")
+    if sig["status"] == "insufficient_trials":
+        return (f"Session length: only {sig['n_trials']} trial(s) were logged in {_TASK_DESC} "
+                f"(need at least {sig['min_required']}, since decline is measured against a 5-trial rolling "
+                f"average versus a 5-trial opening baseline). Recommend letting the ACTIVE phase run longer "
+                f"(closer to its 5-minute cap) next session so a fatigue/decline point can actually be estimated.")
+    if sig["status"] == "stable":
+        return (f"Session length: across {sig['n_trials']} trials of {_TASK_DESC}, rolling accuracy never fell "
+                f"more than 15 percentage points below the opening baseline of {sig['baseline_accuracy']:.0%} "
+                f"over {sig['total_duration_sec'] / 60:.1f} minutes. No fatigue-driven break point was detected -- "
+                f"the current session length appears tolerable as-is; no change to block length recommended.")
+    minutes = sig["decline_elapsed_sec"] / 60
+    block_min = max(5, round(minutes))
+    return (
+        f"Session length / break timing: in {_TASK_DESC}, accuracy held near {sig['baseline_accuracy']:.0%} for "
+        f"about the first {minutes:.1f} minutes, then the 5-trial rolling average dropped to "
+        f"~{sig['decline_accuracy']:.0%} and stayed down for the remaining "
+        f"{(sig['total_duration_sec'] - sig['decline_elapsed_sec']) / 60:.1f} minutes of the "
+        f"{sig['total_duration_sec'] / 60:.1f}-minute block. Concretely: cap future ACTIVE blocks at roughly "
+        f"{block_min} minute(s), then insert a 1-2 minute passive break -- e.g. switch back to the RESTING/"
+        f"PASSIVE video-watching phase with no button presses required -- before starting the next "
+        f"response-conflict block, rather than running the full 5-minute cap in one stretch."
+    )
 
 
 def recommend_difficulty(sig):
+    cue_desc = (
+        "Trial difficulty is set by the cue color, currently randomized 50/50 each trial: a green circle is the "
+        "congruent/low-difficulty condition (press the button on the SAME side as the star), and a red circle is "
+        "the incongruent/high-difficulty condition (press the OPPOSITE side) -- a Simon-effect-style response-"
+        "conflict manipulation."
+    )
     if sig is None:
-        return "Task pacing: not enough difficulty-tagged trials to assess this session."
+        return (f"Task pacing: {cue_desc} No difficulty-tagged trials of both colors were logged this session, "
+                f"so pacing can't be assessed yet -- make sure the ACTIVE phase runs long enough to log at least "
+                f"a few of each cue color.")
+
+    low_pct, high_pct = sig["acc_low_difficulty"], sig["acc_high_difficulty"]
     if sig["gap"] < 0.1:
-        return (f"Task pacing: accuracy was similar across low ({sig['acc_low_difficulty']:.0%}) and "
-                f"high ({sig['acc_high_difficulty']:.0%}) difficulty trials -- no strong pacing "
-                f"adjustment indicated this session.")
-    return (f"Task pacing / difficulty: accuracy on low-difficulty trials "
-            f"({sig['acc_low_difficulty']:.0%}) was notably higher than on high-difficulty trials "
-            f"({sig['acc_high_difficulty']:.0%}). Recommend introducing harder task variants "
-            f"gradually rather than mixing difficulty levels from the start.")
+        return (f"Task pacing / difficulty: {cue_desc} Accuracy was similar on green/low trials "
+                f"(n={sig['n_low']}, {low_pct:.0%}) and red/high trials (n={sig['n_high']}, {high_pct:.0%}). "
+                f"The current fixed 50/50 mix of congruent and incongruent trials appears well-tolerated -- no "
+                f"pacing change recommended this session.")
+
+    steps = "80/20 -> 65/35 -> 50/50 green:red"
+    low_acc_note = ""
+    if high_pct < 0.15:
+        low_acc_note = (
+            f" Accuracy on red/high trials is close to floor ({high_pct:.0%}), which can also mean the "
+            f"opposite-side instruction wasn't understood rather than pure task difficulty -- consider adding a "
+            f"short practice block with immediate correct/incorrect feedback on a handful of red trials before "
+            f"the scored session starts."
+        )
+    return (
+        f"Task pacing / difficulty: {cue_desc} Accuracy on low-difficulty/green trials "
+        f"(n={sig['n_low']}, {low_pct:.0%}) was notably higher than on high-difficulty/red trials "
+        f"(n={sig['n_high']}, {high_pct:.0%}). Concretely: replace the fixed 50/50 random mix with a staged "
+        f"ramp -- start new sessions at roughly {steps.split(' -> ')[0]}, and only shift toward more red/"
+        f"incongruent trials (in ~10-15 percentage-point steps: {steps}) once rolling accuracy on red trials "
+        f"climbs above ~70-75% over at least 10 consecutive red trials.{low_acc_note}"
+    )
 
 
 def recommend_modality(sig):
+    modality_desc = (
+        "Visual reorientation latency is measured during the ACTIVE task (time from the star appearing to gaze "
+        "first leaving center); auditory-driven gaze change is measured during the PASSIVE phase, from background "
+        "oddball tones (500Hz standard / 450Hz rare deviant, roughly every 700ms) while the video plays. These "
+        "come from different phases and different kinds of orienting (goal-directed vs reflexive), and gaze speed "
+        "is a frame-to-frame estimate rather than a calibrated eye-tracker signal, so treat the comparison as "
+        "descriptive rather than a controlled A/B test."
+    )
     if sig is None:
-        return "Modality / stimulus format: insufficient data (no tone log or gaze-latency data) this session."
-    parts = []
-    if sig.get("visual_latency_ms") is not None:
-        parts.append(f"visual cue reorientation averaged {sig['visual_latency_ms']:.0f}ms")
-    if sig.get("auditory_gaze_change_frac") is not None:
-        parts.append(f"auditory tones changed gaze speed by {sig['auditory_gaze_change_frac']:.0%}")
-    detail = "; ".join(parts) if parts else "no clear signal"
-    return (f"Modality / stimulus format: {detail}. No strong preference detected this session -- "
-            f"insufficient difference to recommend one format over the other yet.")
+        return (f"Modality / stimulus format: {modality_desc} No target_gaze_latency_ms values from the ACTIVE "
+                f"task or usable oddball_tone_log/gaze-offset data from the PASSIVE phase were found this session, "
+                f"so modality can't be compared yet.")
+
+    vis = sig.get("visual_latency_ms")
+    aud = sig.get("auditory_gaze_change_frac")
+    vis_str = f"visual cue reorientation averaged {vis:.0f}ms" if vis is not None else "no visual-latency data"
+    aud_str = f"auditory tones changed gaze speed by {aud:.0%}" if aud is not None else "no auditory-gaze data"
+
+    weak_aud_note = ""
+    if aud is not None and aud < 0.05:
+        weak_aud_note = (
+            " Since the tones produced almost no measurable gaze change, they may be too subtle to hold "
+            "attention as-is -- consider widening the standard/deviant gap (e.g. 500Hz vs 350Hz instead of 450Hz) "
+            "or increasing tone volume, then re-testing the PASSIVE phase before concluding there's no auditory "
+            "orienting response."
+        )
+
+    return (f"Modality / stimulus format: {modality_desc} This session: {vis_str}; {aud_str}. No strong "
+            f"preference detected yet -- insufficient difference to recommend visual-only or auditory-only "
+            f"stimulus delivery over the other.{weak_aud_note}")
 
 
 def recommend_transitions(sig):
+    transition_desc = (
+        "Reactivity is captured automatically at each phase change (RESTING->PASSIVE around the 3-minute video "
+        "mark, and PASSIVE->ACTIVE when the video ends and the response-conflict task begins), by comparing "
+        "RMSSD and BPM in the 5 seconds before vs after the switch."
+    )
     if sig is None:
-        return "Transitions: no phase-transition data recorded this session."
-    return (f"Transitions: largest physiological shift was {sig['rmssd_reactivity_ms']:+.1f}ms RMSSD "
-            f"around the {sig['transition']} transition. Recommend giving advance warning before "
-            f"switching activities, rather than abrupt transitions.")
+        return (f"Transitions: {transition_desc} No usable phase_transitions data was recorded this session -- "
+                f"make sure at least one phase change (RESTING, PASSIVE, ACTIVE) occurred with valid RMSSD "
+                f"readings in the surrounding 5-second window.")
+
+    transition_label = sig["transition"].replace("->", " -> ")
+    is_active_switch = "ACTIVE" in sig["transition"]
+    switch_context = (
+        "the shift from passively watching the video (with background tones) into the hands-on button-press task"
+        if is_active_switch else
+        "the shift from the resting baseline into passive video-watching with background tones"
+    )
+    return (
+        f"Transitions: {transition_desc} This session, the largest physiological shift was "
+        f"{sig['rmssd_reactivity_ms']:+.1f}ms RMSSD around the {transition_label} transition -- i.e. {switch_context}. "
+        f"Concretely: add an explicit lead-in before that transition rather than switching immediately -- e.g. a "
+        f"5-10 second on-screen countdown ('Task starts in 5... 4... 3...') or a short spoken heads-up repeating "
+        f"the instructions -- instead of the response-conflict task or the tone stream starting the instant the "
+        f"video ends or hits the 3-minute mark."
+    )
 
 
 def recommend_distraction(sig):
+    setup_desc = (
+        "Distractor zones are optional rectangular screen regions registered via "
+        "NeuroGazeAPI.setDistractorZones(zones) before Start is clicked; the recorder then tracks what fraction "
+        "of zone-relevant gaze time was spent inside each registered zone."
+    )
     if sig is None:
-        return "Environment / distraction sensitivity: no distractor zones were configured this session -- category not evaluated."
-    return (f"Environment / distraction sensitivity: {sig['fraction_of_zone_time']:.0%} of zone-relevant "
-            f"time was spent fixating on '{sig['zone']}'. Recommend a visually simplified workspace "
-            f"with minimal peripheral clutter during focused tasks.")
+        return (f"Environment / distraction sensitivity: {setup_desc} No zones were configured this session "
+                f"(setDistractorZones was never called, or was called with an empty list), so this category "
+                f"wasn't evaluated. To assess it next session: define 1-3 zones matching real distractions in "
+                f"the participant's actual environment -- e.g. a phone on the desk, a doorway, a second monitor "
+                f"-- as coordinate rectangles, and pass them to setDistractorZones before starting the recording.")
+
+    return (
+        f"Environment / distraction sensitivity: {setup_desc} This session, {sig['fraction_of_zone_time']:.0%} of "
+        f"zone-relevant fixation time was spent on the '{sig['zone']}' zone. Concretely: physically remove or "
+        f"cover whatever occupies that zone during focused work (or reposition the screen/seating so it falls "
+        f"outside the participant's forward gaze cone), then re-run the ACTIVE phase and compare whether the "
+        f"off-task fixation fraction on that zone drops."
+    )
