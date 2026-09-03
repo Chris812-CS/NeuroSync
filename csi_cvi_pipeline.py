@@ -726,159 +726,160 @@ def signal_distraction(dfs):
     return {"zone": top["zone"], "fraction_of_zone_time": round(top["fraction_of_zone_time"], 3)}
 
 
-# --- recommendation text -------------------------------------------------
-
-_TASK_DESC = (
-    "the gap-overlap response-conflict task (ACTIVE phase, up to 5 min): a colored "
-    "circle appears, then 1.5s later a star appears on the left or right, with a "
-    "1.5s window to respond and a 0.5s gap before the next trial"
-)
-
+# --- recommendation text (parent-facing) ----------------------------------
+#
+# These are written for a parent/caregiver reading a take-home report, not for
+# a technical audience: plain wording, no jargon (no phase names, ms/RMSSD
+# values, or condition labels), an empathetic framing of what was observed,
+# and a short list of concrete, low-effort things a parent can try. Every
+# sentence still traces back to a real signal -- nothing here is invented --
+# but the *why* stays in code comments rather than the parent-facing text.
+# A brief reminder that this is one session's snapshot, not a diagnosis, is
+# included where it matters most (the difficulty and transition sections).
 
 def recommend_session_length(sig):
-    if sig["status"] == "no_task_data":
-        return (f"Session length: no response-conflict trials were recorded this session, so break timing "
-                f"can't be assessed from {_TASK_DESC}. Make sure the ACTIVE phase is marked/reached before stopping.")
-    if sig["status"] == "insufficient_trials":
-        return (f"Session length: only {sig['n_trials']} trial(s) were logged in {_TASK_DESC} "
-                f"(need at least {sig['min_required']}, since decline is measured against a 5-trial rolling "
-                f"average versus a 5-trial opening baseline). Recommend letting the ACTIVE phase run longer "
-                f"(closer to its 5-minute cap) next session so a fatigue/decline point can actually be estimated.")
+    if sig["status"] in ("no_task_data", "insufficient_trials"):
+        return ("How long to keep activities going: we didn't get quite enough of the game completed this time "
+                "to see a clear pattern in your child's focus over time. That's completely fine — it just means "
+                "we don't have a full picture yet. If your child is willing, letting them play a little longer "
+                "next time will help us see when they naturally start needing a break.")
+
     if sig["status"] == "stable":
-        return (f"Session length: across {sig['n_trials']} trials of {_TASK_DESC}, rolling accuracy never fell "
-                f"more than 15 percentage points below the opening baseline of {sig['baseline_accuracy']:.0%} "
-                f"over {sig['total_duration_sec'] / 60:.1f} minutes. No fatigue-driven break point was detected -- "
-                f"the current session length appears tolerable as-is; no change to block length recommended.")
+        return ("How long to keep activities going: your child kept a steady pace through the whole activity "
+                "today, without a clear dip in performance. That's a good sign — it suggests the current length "
+                "of the activity suits them well right now, so there's no need to shorten it or add extra breaks.")
+
     minutes = sig["decline_elapsed_sec"] / 60
-    block_min = max(5, round(minutes))
+    break_after = max(5, round(minutes))
     return (
-        f"Session length / break timing: in {_TASK_DESC}, accuracy held near {sig['baseline_accuracy']:.0%} for "
-        f"about the first {minutes:.1f} minutes, then the 5-trial rolling average dropped to "
-        f"~{sig['decline_accuracy']:.0%} and stayed down for the remaining "
-        f"{(sig['total_duration_sec'] - sig['decline_elapsed_sec']) / 60:.1f} minutes of the "
-        f"{sig['total_duration_sec'] / 60:.1f}-minute block. Concretely: cap future ACTIVE blocks at roughly "
-        f"{block_min} minute(s), then insert a 1-2 minute passive break -- e.g. switch back to the RESTING/"
-        f"PASSIVE video-watching phase with no button presses required -- before starting the next "
-        f"response-conflict block, rather than running the full 5-minute cap in one stretch."
+        f"How long to keep activities going: your child did well for about the first {minutes:.0f} minutes, "
+        f"and then their performance dropped off and didn't fully bounce back for the rest of the session. This "
+        f"is very normal and doesn't mean they weren't trying — it usually just means they'd reached their limit "
+        f"for sustained focus that day. A simple thing to try: after roughly {break_after} minutes of focused "
+        f"activity, offer a short 1-2 minute break — a stretch, a sip of water, or a few minutes of something "
+        f"relaxed like watching a video — before asking them to focus again. Building in breaks like this can "
+        f"take pressure off both of you, since a tired brain isn't a sign of not trying hard enough."
     )
 
 
 def recommend_difficulty(sig):
-    cue_desc = (
-        "Trial difficulty is set by the cue color, currently randomized 50/50 each trial: a green circle is the "
-        "congruent/low-difficulty condition (press the button on the SAME side as the star), and a red circle is "
-        "the incongruent/high-difficulty condition (press the OPPOSITE side) -- a Simon-effect-style response-"
-        "conflict manipulation."
-    )
     if sig is None:
-        return (f"Task pacing: {cue_desc} No difficulty-tagged trials of both colors were logged this session, "
-                f"so pacing can't be assessed yet -- make sure the ACTIVE phase runs long enough to log at least "
-                f"a few of each cue color.")
+        return ("Practicing the trickier version of the game: we didn't get enough rounds of both the easy and "
+                "the trickier version of the game this time to compare them. No action needed — we'll get a "
+                "clearer picture next session.")
 
     low_pct, high_pct = sig["acc_low_difficulty"], sig["acc_high_difficulty"]
     if sig["gap"] < 0.1:
-        return (f"Task pacing / difficulty: {cue_desc} Accuracy was similar on green/low trials "
-                f"(n={sig['n_low']}, {low_pct:.0%}) and red/high trials (n={sig['n_high']}, {high_pct:.0%}). "
-                f"The current fixed 50/50 mix of congruent and incongruent trials appears well-tolerated -- no "
-                f"pacing change recommended this session.")
+        return ("Practicing the trickier version of the game: your child did about the same on both the easy "
+                "and the trickier rounds of the game. That's a great sign — they're managing the harder rule "
+                "just as well as the simple one, so there's nothing you need to change about how you play it "
+                "together right now.")
 
-    steps = "80/20 -> 65/35 -> 50/50 green:red"
-    low_acc_note = ""
+    note = ""
     if high_pct < 0.15:
-        low_acc_note = (
-            f" Accuracy on red/high trials is close to floor ({high_pct:.0%}), which can also mean the "
-            f"opposite-side instruction wasn't understood rather than pure task difficulty -- consider adding a "
-            f"short practice block with immediate correct/incorrect feedback on a handful of red trials before "
-            f"the scored session starts."
+        note = (
+            " If the trickier rounds are still very hard to get right, it may simply mean the 'do the opposite' "
+            "rule hasn't quite clicked yet, rather than your child not being capable of it — a quick reminder of "
+            "the rule right before playing can make a real difference."
         )
     return (
-        f"Task pacing / difficulty: {cue_desc} Accuracy on low-difficulty/green trials "
-        f"(n={sig['n_low']}, {low_pct:.0%}) was notably higher than on high-difficulty/red trials "
-        f"(n={sig['n_high']}, {high_pct:.0%}). Concretely: replace the fixed 50/50 random mix with a staged "
-        f"ramp -- start new sessions at roughly {steps.split(' -> ')[0]}, and only shift toward more red/"
-        f"incongruent trials (in ~10-15 percentage-point steps: {steps}) once rolling accuracy on red trials "
-        f"climbs above ~70-75% over at least 10 consecutive red trials.{low_acc_note}"
+        f"Practicing the trickier version of the game: your child did well on the easy rounds ({low_pct:.0%} "
+        f"correct) but found the trickier rounds — where they have to do the opposite of their first instinct — "
+        f"much harder ({high_pct:.0%} correct). This is a very common pattern, especially while a child is still "
+        f"building the skill of pausing before reacting. It's not a sign of a problem — it's a skill that takes "
+        f"practice, the same way learning to catch a ball takes practice.\n\n"
+        f"A few things that can help at home:\n"
+        f"- Play mostly the easy version for a while so your child feels confident, then mix in just a few "
+        f"trickier rounds at a time rather than jumping straight to a 50/50 mix.\n"
+        f"- Try quick, playful practice outside of the formal session — games like 'Simon Says, but do the "
+        f"opposite' or 'if I point up, you point down' build the same pause-and-think skill in a low-pressure way.\n"
+        f"- Praise the attempt to pause and think, not just getting it right. A slower, careful wrong answer is "
+        f"still real progress.\n"
+        f"- Keep it short and upbeat — a couple of minutes of practice a day tends to work better than one long, "
+        f"frustrating session.{note}\n\n"
+        f"This is one session's snapshot, not a diagnosis — if this pattern keeps showing up over several "
+        f"sessions, it's worth mentioning to your child's pediatrician or a developmental specialist, who can "
+        f"look at it alongside everything else they know about your child."
     )
 
 
 def recommend_modality(sig):
-    modality_desc = (
-        "Visual reorientation latency is measured during the ACTIVE task (time from the star appearing to gaze "
-        "first leaving center); auditory-driven gaze change is measured during the PASSIVE phase, from background "
-        "oddball tones (500Hz standard / 450Hz rare deviant, roughly every 700ms) while the video plays. These "
-        "come from different phases and different kinds of orienting (goal-directed vs reflexive), and gaze speed "
-        "is a frame-to-frame estimate rather than a calibrated eye-tracker signal, so treat the comparison as "
-        "descriptive rather than a controlled A/B test."
-    )
     if sig is None:
-        return (f"Modality / stimulus format: {modality_desc} No target_gaze_latency_ms values from the ACTIVE "
-                f"task or usable oddball_tone_log/gaze-offset data from the PASSIVE phase were found this session, "
-                f"so modality can't be compared yet.")
+        return ("How your child takes in instructions: we didn't get enough information this session to tell "
+                "whether your child responds better to things they see or things they hear. No action needed — "
+                "we'll take another look next time.")
 
     vis = sig.get("visual_latency_ms")
     aud = sig.get("auditory_gaze_change_frac")
-    vis_str = f"visual cue reorientation averaged {vis:.0f}ms" if vis is not None else "no visual-latency data"
-    aud_str = f"auditory tones changed gaze speed by {aud:.0%}" if aud is not None else "no auditory-gaze data"
 
-    weak_aud_note = ""
+    if vis is None and aud is None:
+        return ("How your child takes in instructions: we didn't get enough information this session to tell "
+                "whether your child responds better to things they see or things they hear.")
+
+    weak_sound_note = ""
     if aud is not None and aud < 0.05:
-        weak_aud_note = (
-            " Since the tones produced almost no measurable gaze change, they may be too subtle to hold "
-            "attention as-is -- consider widening the standard/deviant gap (e.g. 500Hz vs 350Hz instead of 450Hz) "
-            "or increasing tone volume, then re-testing the PASSIVE phase before concluding there's no auditory "
-            "orienting response."
+        weak_sound_note = (
+            " The background sounds during today's session were quite soft, so this doesn't necessarily mean "
+            "sounds don't get your child's attention — just that today's sounds may have been easy to tune out."
         )
 
-    return (f"Modality / stimulus format: {modality_desc} This session: {vis_str}; {aud_str}. No strong "
-            f"preference detected yet -- insufficient difference to recommend visual-only or auditory-only "
-            f"stimulus delivery over the other.{weak_aud_note}")
+    return (
+        "How your child takes in instructions: we looked at how quickly your child's attention shifted toward "
+        "something they could see versus something they could hear in the background. So far, we don't see a "
+        "clear preference for one over the other. That means at this stage, either speaking to your child "
+        "directly or showing them something (a picture, a gesture, pointing) should work about equally well for "
+        f"getting their attention.{weak_sound_note} If you notice at home that your child reacts much faster to "
+        "one or the other — for example, they respond quicker when you show them something than when you call "
+        "their name — it's worth leaning into whichever one seems to reach them best, especially for important "
+        "reminders or instructions."
+    )
 
 
 def recommend_transitions(sig):
-    transition_desc = (
-        "Reactivity is captured automatically at each phase change (RESTING->PASSIVE around the 3-minute video "
-        "mark, and PASSIVE->ACTIVE when the video ends and the response-conflict task begins), by comparing "
-        "RMSSD and BPM in the 5 seconds before vs after the switch."
-    )
     if sig is None:
-        return (f"Transitions: {transition_desc} No usable phase_transitions data was recorded this session -- "
-                f"make sure at least one phase change (RESTING, PASSIVE, ACTIVE) occurred with valid RMSSD "
-                f"readings in the surrounding 5-second window.")
+        return ("Switching between activities: we didn't catch a clear activity change this session to see how "
+                "your child responds to switches. No action needed.")
 
-    transition_label = sig["transition"].replace("->", " -> ")
-    is_active_switch = "ACTIVE" in sig["transition"]
+    is_to_active = "ACTIVE" in sig["transition"]
     switch_context = (
-        "the shift from passively watching the video (with background tones) into the hands-on button-press task"
-        if is_active_switch else
-        "the shift from the resting baseline into passive video-watching with background tones"
+        "switching from watching the video to starting the game"
+        if is_to_active else
+        "switching from a calm start into watching the video"
     )
     return (
-        f"Transitions: {transition_desc} This session, the largest physiological shift was "
-        f"{sig['rmssd_reactivity_ms']:+.1f}ms RMSSD around the {transition_label} transition -- i.e. {switch_context}. "
-        f"Concretely: add an explicit lead-in before that transition rather than switching immediately -- e.g. a "
-        f"5-10 second on-screen countdown ('Task starts in 5... 4... 3...') or a short spoken heads-up repeating "
-        f"the instructions -- instead of the response-conflict task or the tone stream starting the instant the "
-        f"video ends or hits the 3-minute mark."
+        f"Switching between activities: the biggest reaction we noticed all session was right when your child "
+        f"was {switch_context} — their body showed a noticeable startle-type response at that moment. This is "
+        f"common and doesn't mean anything is wrong; sudden changes can feel a little jarring for many children, "
+        f"especially when they're deep in focus on something else.\n\n"
+        f"A few simple things that tend to help:\n"
+        f"- Give a heads-up before switching, instead of switching all at once — for example, 'in a couple of "
+        f"minutes we're going to stop this and do something else.'\n"
+        f"- Use a visual or verbal countdown they can follow, like counting down from 5.\n"
+        f"- A short calming moment between activities — one deep breath, a stretch, or a familiar phrase you "
+        f"always use — can help them feel ready before the next thing starts.\n\n"
+        f"Giving advance warning like this can make transitions feel less overwhelming for your child, and it "
+        f"may also mean fewer tears, refusals, or meltdowns around activity changes at home — which can take a "
+        f"real load off you as well, not just your child."
     )
 
 
 def recommend_distraction(sig):
-    setup_desc = (
-        "Distractor zones are optional rectangular screen regions registered via "
-        "NeuroGazeAPI.setDistractorZones(zones) before Start is clicked; the recorder then tracks what fraction "
-        "of zone-relevant gaze time was spent inside each registered zone."
-    )
     if sig is None:
-        return (f"Environment / distraction sensitivity: {setup_desc} No zones were configured this session "
-                f"(setDistractorZones was never called, or was called with an empty list), so this category "
-                f"wasn't evaluated. To assess it next session: define 1-3 zones matching real distractions in "
-                f"the participant's actual environment -- e.g. a phone on the desk, a doorway, a second monitor "
-                f"-- as coordinate rectangles, and pass them to setDistractorZones before starting the recording.")
+        return ("Their surroundings during focused activities: we didn't track any specific distractions in "
+                "your child's surroundings this session. If there's something in their everyday environment — a "
+                "phone, a window, a sibling nearby — that you suspect pulls their attention away, let us know "
+                "and we can check for that specifically next time.")
 
     return (
-        f"Environment / distraction sensitivity: {setup_desc} This session, {sig['fraction_of_zone_time']:.0%} of "
-        f"zone-relevant fixation time was spent on the '{sig['zone']}' zone. Concretely: physically remove or "
-        f"cover whatever occupies that zone during focused work (or reposition the screen/seating so it falls "
-        f"outside the participant's forward gaze cone), then re-run the ACTIVE phase and compare whether the "
-        f"off-task fixation fraction on that zone drops."
+        f"Their surroundings during focused activities: during this session, your child's attention was pulled "
+        f"toward one particular spot in their surroundings about {sig['fraction_of_zone_time']:.0%} of the time "
+        f"when they were supposed to be focused on the activity. That tells us something in that area is likely "
+        f"competing for their attention.\n\n"
+        f"A few things worth trying:\n"
+        f"- See if you can remove or cover whatever is in that spot during homework or focus time — for example, "
+        f"putting a phone in another room, closing a door, or turning a screen away.\n"
+        f"- Where possible, set up a simple, calm space for focused activities, without too much visual clutter "
+        f"nearby. Even small changes can make a real difference for a child who's easily pulled away.\n"
+        f"- You don't need to fix everything at once — removing even one distraction at a time is a reasonable "
+        f"place to start, and it can take some of the guesswork off your plate."
     )
