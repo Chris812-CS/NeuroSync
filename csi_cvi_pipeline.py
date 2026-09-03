@@ -3,7 +3,7 @@ CSI/CVI unknown-group analysis pipeline.
 
 Ported near-verbatim from csi_cvi_analysis_unknown_group_v2.ipynb so the
 numbers produced by the dashboard match the notebook exactly. This module
-has no Streamlit dependency -- it's pure data logic, imported by app.py.
+has no Streamlit dependency; it's pure data logic, imported by app.py.
 """
 import io
 import re
@@ -396,7 +396,7 @@ def flag_match_ratios(metrics, rel_tol=REL_TOL):
 
 
 # ------------------------------------------------------------------
-# Filename parsing (group label -- kept out of any display until user reveals it)
+# Filename parsing (group label, kept out of any display until user reveals it)
 # ------------------------------------------------------------------
 def parse_filename(stem):
     low = stem.lower()
@@ -732,7 +732,7 @@ def signal_distraction(dfs):
 # a technical audience: plain wording, no jargon (no phase names, ms/RMSSD
 # values, or condition labels), an empathetic framing of what was observed,
 # and a short list of concrete, low-effort things a parent can try. Every
-# sentence still traces back to a real signal -- nothing here is invented --
+# sentence still traces back to a real signal, and nothing here is invented,
 # but the *why* stays in code comments rather than the parent-facing text.
 # A brief reminder that this is one session's snapshot, not a diagnosis, is
 # included where it matters most (the difficulty and transition sections).
@@ -740,24 +740,25 @@ def signal_distraction(dfs):
 def recommend_session_length(sig):
     if sig["status"] in ("no_task_data", "insufficient_trials"):
         return ("How long to keep activities going: we didn't get quite enough of the game completed this time "
-                "to see a clear pattern in your child's focus over time. That's completely fine — it just means "
+                "to see a clear pattern in your child's focus over time. That's completely fine; it just means "
                 "we don't have a full picture yet. If your child is willing, letting them play a little longer "
                 "next time will help us see when they naturally start needing a break.")
 
     if sig["status"] == "stable":
         return ("How long to keep activities going: your child kept a steady pace through the whole activity "
-                "today, without a clear dip in performance. That's a good sign — it suggests the current length "
-                "of the activity suits them well right now, so there's no need to shorten it or add extra breaks.")
+                "today, without a clear dip in performance. That's a good sign, and it suggests the current "
+                "length of the activity suits them well right now, so there's no need to shorten it or add "
+                "extra breaks.")
 
     minutes = sig["decline_elapsed_sec"] / 60
     break_after = max(5, round(minutes))
     return (
         f"How long to keep activities going: your child did well for about the first {minutes:.0f} minutes, "
         f"and then their performance dropped off and didn't fully bounce back for the rest of the session. This "
-        f"is very normal and doesn't mean they weren't trying — it usually just means they'd reached their limit "
+        f"is very normal and doesn't mean they weren't trying; it usually just means they'd reached their limit "
         f"for sustained focus that day. A simple thing to try: after roughly {break_after} minutes of focused "
-        f"activity, offer a short 1-2 minute break — a stretch, a sip of water, or a few minutes of something "
-        f"relaxed like watching a video — before asking them to focus again. Building in breaks like this can "
+        f"activity, offer a short 1-2 minute break (a stretch, a sip of water, or a few minutes of something "
+        f"relaxed like watching a video) before asking them to focus again. Building in breaks like this can "
         f"take pressure off both of you, since a tired brain isn't a sign of not trying hard enough."
     )
 
@@ -765,13 +766,13 @@ def recommend_session_length(sig):
 def recommend_difficulty(sig):
     if sig is None:
         return ("Practicing the trickier version of the game: we didn't get enough rounds of both the easy and "
-                "the trickier version of the game this time to compare them. No action needed — we'll get a "
+                "the trickier version of the game this time to compare them. No action needed; we'll get a "
                 "clearer picture next session.")
 
     low_pct, high_pct = sig["acc_low_difficulty"], sig["acc_high_difficulty"]
     if sig["gap"] < 0.1:
         return ("Practicing the trickier version of the game: your child did about the same on both the easy "
-                "and the trickier rounds of the game. That's a great sign — they're managing the harder rule "
+                "and the trickier rounds of the game. That's a great sign: they're managing the harder rule "
                 "just as well as the simple one, so there's nothing you need to change about how you play it "
                 "together right now.")
 
@@ -779,25 +780,25 @@ def recommend_difficulty(sig):
     if high_pct < 0.15:
         note = (
             " If the trickier rounds are still very hard to get right, it may simply mean the 'do the opposite' "
-            "rule hasn't quite clicked yet, rather than your child not being capable of it — a quick reminder of "
+            "rule hasn't quite clicked yet, rather than your child not being capable of it. A quick reminder of "
             "the rule right before playing can make a real difference."
         )
     return (
         f"Practicing the trickier version of the game: your child did well on the easy rounds ({low_pct:.0%} "
-        f"correct) but found the trickier rounds — where they have to do the opposite of their first instinct — "
+        f"correct), but found the trickier rounds, where they have to do the opposite of their first instinct, "
         f"much harder ({high_pct:.0%} correct). This is a very common pattern, especially while a child is still "
-        f"building the skill of pausing before reacting. It's not a sign of a problem — it's a skill that takes "
+        f"building the skill of pausing before reacting. It's not a sign of a problem: it's a skill that takes "
         f"practice, the same way learning to catch a ball takes practice.\n\n"
         f"A few things that can help at home:\n"
         f"- Play mostly the easy version for a while so your child feels confident, then mix in just a few "
         f"trickier rounds at a time rather than jumping straight to a 50/50 mix.\n"
-        f"- Try quick, playful practice outside of the formal session — games like 'Simon Says, but do the "
+        f"- Try quick, playful practice outside of the formal session. Games like 'Simon Says, but do the "
         f"opposite' or 'if I point up, you point down' build the same pause-and-think skill in a low-pressure way.\n"
         f"- Praise the attempt to pause and think, not just getting it right. A slower, careful wrong answer is "
         f"still real progress.\n"
-        f"- Keep it short and upbeat — a couple of minutes of practice a day tends to work better than one long, "
+        f"- Keep it short and upbeat. A couple of minutes of practice a day tends to work better than one long, "
         f"frustrating session.{note}\n\n"
-        f"This is one session's snapshot, not a diagnosis — if this pattern keeps showing up over several "
+        f"This is one session's snapshot, not a diagnosis. If this pattern keeps showing up over several "
         f"sessions, it's worth mentioning to your child's pediatrician or a developmental specialist, who can "
         f"look at it alongside everything else they know about your child."
     )
@@ -806,7 +807,7 @@ def recommend_difficulty(sig):
 def recommend_modality(sig):
     if sig is None:
         return ("How your child takes in instructions: we didn't get enough information this session to tell "
-                "whether your child responds better to things they see or things they hear. No action needed — "
+                "whether your child responds better to things they see or things they hear. No action needed; "
                 "we'll take another look next time.")
 
     vis = sig.get("visual_latency_ms")
@@ -820,7 +821,7 @@ def recommend_modality(sig):
     if aud is not None and aud < 0.05:
         weak_sound_note = (
             " The background sounds during today's session were quite soft, so this doesn't necessarily mean "
-            "sounds don't get your child's attention — just that today's sounds may have been easy to tune out."
+            "sounds don't get your child's attention. It just means today's sounds may have been easy to tune out."
         )
 
     return (
@@ -829,8 +830,8 @@ def recommend_modality(sig):
         "clear preference for one over the other. That means at this stage, either speaking to your child "
         "directly or showing them something (a picture, a gesture, pointing) should work about equally well for "
         f"getting their attention.{weak_sound_note} If you notice at home that your child reacts much faster to "
-        "one or the other — for example, they respond quicker when you show them something than when you call "
-        "their name — it's worth leaning into whichever one seems to reach them best, especially for important "
+        "one or the other, for example they respond quicker when you show them something than when you call "
+        "their name, it's worth leaning into whichever one seems to reach them best, especially for important "
         "reminders or instructions."
     )
 
@@ -848,17 +849,17 @@ def recommend_transitions(sig):
     )
     return (
         f"Switching between activities: the biggest reaction we noticed all session was right when your child "
-        f"was {switch_context} — their body showed a noticeable startle-type response at that moment. This is "
+        f"was {switch_context}. Their body showed a noticeable startle-type response at that moment. This is "
         f"common and doesn't mean anything is wrong; sudden changes can feel a little jarring for many children, "
         f"especially when they're deep in focus on something else.\n\n"
         f"A few simple things that tend to help:\n"
-        f"- Give a heads-up before switching, instead of switching all at once — for example, 'in a couple of "
+        f"- Give a heads-up before switching, instead of switching all at once. For example: 'in a couple of "
         f"minutes we're going to stop this and do something else.'\n"
         f"- Use a visual or verbal countdown they can follow, like counting down from 5.\n"
-        f"- A short calming moment between activities — one deep breath, a stretch, or a familiar phrase you "
-        f"always use — can help them feel ready before the next thing starts.\n\n"
+        f"- A short calming moment between activities (one deep breath, a stretch, or a familiar phrase you "
+        f"always use) can help them feel ready before the next thing starts.\n\n"
         f"Giving advance warning like this can make transitions feel less overwhelming for your child, and it "
-        f"may also mean fewer tears, refusals, or meltdowns around activity changes at home — which can take a "
+        f"may also mean fewer tears, refusals, or meltdowns around activity changes at home, which can take a "
         f"real load off you as well, not just your child."
     )
 
@@ -866,8 +867,8 @@ def recommend_transitions(sig):
 def recommend_distraction(sig):
     if sig is None:
         return ("Their surroundings during focused activities: we didn't track any specific distractions in "
-                "your child's surroundings this session. If there's something in their everyday environment — a "
-                "phone, a window, a sibling nearby — that you suspect pulls their attention away, let us know "
+                "your child's surroundings this session. If there's something in their everyday environment (a "
+                "phone, a window, a sibling nearby) that you suspect pulls their attention away, let us know "
                 "and we can check for that specifically next time.")
 
     return (
@@ -876,10 +877,10 @@ def recommend_distraction(sig):
         f"when they were supposed to be focused on the activity. That tells us something in that area is likely "
         f"competing for their attention.\n\n"
         f"A few things worth trying:\n"
-        f"- See if you can remove or cover whatever is in that spot during homework or focus time — for example, "
-        f"putting a phone in another room, closing a door, or turning a screen away.\n"
+        f"- See if you can remove or cover whatever is in that spot during homework or focus time. For example, "
+        f"put a phone in another room, close a door, or turn a screen away.\n"
         f"- Where possible, set up a simple, calm space for focused activities, without too much visual clutter "
         f"nearby. Even small changes can make a real difference for a child who's easily pulled away.\n"
-        f"- You don't need to fix everything at once — removing even one distraction at a time is a reasonable "
+        f"- You don't need to fix everything at once. Removing even one distraction at a time is a reasonable "
         f"place to start, and it can take some of the guesswork off your plate."
     )
