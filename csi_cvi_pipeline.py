@@ -1013,7 +1013,7 @@ def recommend_focus_by_phase(sig):
     if sig["spread"] < 0.1:
         return (
             f"Where their attention held best: your child's eyes stayed on-task about equally well across "
-            f"everything we tried today — {best_pct:.0%} during {best_label} and {worst_pct:.0%} during "
+            f"everything we tried today: {best_pct:.0%} during {best_label} and {worst_pct:.0%} during "
             f"{worst_label}. That's a good sign that focus isn't tied to one particular kind of activity. "
             f"Since attention doesn't dip for any one type of task, there's no need to warm up with an easier "
             f"activity first: you can lead with whichever one matters most that day and expect it to go about "
@@ -1022,8 +1022,8 @@ def recommend_focus_by_phase(sig):
 
     return (
         f"Where their attention held best: your child's eyes stayed on-task {best_pct:.0%} of the time during "
-        f"{best_label}, compared with {worst_pct:.0%} during {worst_label}. That's a "
-        f"fairly normal difference — some activities naturally hold attention better than others. If you're "
+        f"{best_label}, compared with {worst_pct:.0%} during {worst_label}. That's a fairly normal difference: "
+        f"some activities naturally hold attention better than others. If you're "
         f"choosing what to lead with during homework or practice time, starting with something closer to "
         f"{best_label} in style may help ease them in before moving to trickier or less engaging tasks."
     )
@@ -1044,11 +1044,11 @@ def recommend_recovery(sig):
     if sig["notable_frac"] < 0.2:
         return (
             f"Bouncing back after each turn: most of the time, your child's eyes were already back on the game "
-            f"right after responding. A handful of rounds (about {pct:.0%}) took a bit longer to refocus — typically "
-            f"around {seconds:.1f} seconds — which is a completely normal, occasional dip in attention during a "
-            f"repetitive game, not something to be concerned about. No changes needed here, but on the rounds "
-            f"where it does take your child a moment to refocus, a short verbal cue right after they answer "
-            f"('nice — now look here') can help them settle back in a little faster."
+            f"right after responding. A handful of rounds (about {pct:.0%}) took a bit longer to refocus "
+            f"(typically around {seconds:.1f} seconds), which is a completely normal, occasional dip in attention "
+            f"during a repetitive game, not something to be concerned about. No changes needed here, but on the "
+            f"rounds where it does take your child a moment to refocus, a short verbal cue right after they answer "
+            f"('nice, now look here') can help them settle back in a little faster."
         )
 
     return (
@@ -1069,7 +1069,7 @@ def recommend_heart_rate_response(sig):
         return (
             f"Their body's response to the game: your child's heart rate stayed fairly steady between the calm "
             f"video (about {sig['resting_bpm']:.0f} bpm) and the game (about {sig['active_bpm']:.0f} bpm). "
-            f"That's a normal, relaxed response — the game didn't seem to key them up much either way. No action "
+            f"That's a normal, relaxed response: the game didn't seem to key them up much either way. No action "
             f"needed here; it's worth treating this as your child's calm-and-engaged baseline, so a noticeably "
             f"bigger jump in a future session would be the thing worth mentioning alongside everything else."
         )
@@ -1078,7 +1078,7 @@ def recommend_heart_rate_response(sig):
     return (
         f"Their body's response to the game: your child's heart rate {direction} from about "
         f"{sig['resting_bpm']:.0f} bpm during the calm video to about {sig['active_bpm']:.0f} bpm during the "
-        f"game. A change like this is a completely normal sign of engagement or excitement — bodies naturally "
+        f"game. A change like this is a completely normal sign of engagement or excitement: bodies naturally "
         f"rev up a little for something active or attention-demanding, similar to what happens during play or "
         f"exercise. It's not something to be concerned about on its own; it's just useful context alongside the "
         f"other patterns in this report."
@@ -1101,8 +1101,8 @@ def recommend_pacing_steadiness(sig):
         )
 
     return (
-        f"How steady their pace was: your child's response times varied quite a bit round to round — "
-        f"averaging about {seconds:.2f} seconds, but with some rounds much faster or slower than others. This kind of "
+        f"How steady their pace was: your child's response times varied quite a bit round to round "
+        f"(averaging about {seconds:.2f} seconds), but with some rounds much faster or slower than others. This kind of "
         f"up-and-down pacing is common and doesn't mean anything is wrong; it can simply mean attention drifted in "
         f"and out a little during the game, which is normal for a repetitive task. If it's helpful, keeping rounds "
         f"short and spaced out (rather than one long stretch) may help even out the pace."
