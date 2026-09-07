@@ -433,6 +433,10 @@ with tab_session:
     st.markdown("3. " + pl.recommend_modality(pl.signal_modality(metrics, dfs)))
     st.markdown("4. " + pl.recommend_transitions(pl.signal_transition_reactivity(dfs)))
     st.markdown("5. " + pl.recommend_distraction(pl.signal_distraction(dfs)))
+    st.markdown("6. " + pl.recommend_focus_by_phase(pl.signal_focus_by_phase(dfs)))
+    st.markdown("7. " + pl.recommend_recovery(pl.signal_post_response_recovery(dfs)))
+    st.markdown("8. " + pl.recommend_heart_rate_response(pl.signal_heart_rate_response(dfs)))
+    st.markdown("9. " + pl.recommend_pacing_steadiness(pl.signal_pacing_steadiness(dfs)))
 
     st.markdown(
         f'<div class="caution-box">Confidence: LOW -- based on a single session, from a pool of '

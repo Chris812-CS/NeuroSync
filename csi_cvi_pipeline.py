@@ -726,6 +726,119 @@ def signal_distraction(dfs):
     return {"zone": top["zone"], "fraction_of_zone_time": round(top["fraction_of_zone_time"], 3)}
 
 
+def _phase_label(phase):
+    if phase == "RESTING":
+        return "the calm video"
+    if phase == "PASSIVE":
+        return "the video with background sounds"
+    if phase == "ACTIVE":
+        return "the game"
+    return phase
+
+
+def signal_focus_by_phase(dfs):
+    """Compares on-task gaze ratio across whichever phases were logged,
+    from the phase_off_task_gaze_ratio section."""
+    df = dfs.get("phase_off_task_gaze_ratio")
+    if df is None or df.empty or "on_task_ms" not in df.columns or "off_task_ms" not in df.columns:
+        return None
+    d = df.copy()
+    d["on_task_ms"] = pd.to_numeric(d["on_task_ms"], errors="coerce")
+    d["off_task_ms"] = pd.to_numeric(d["off_task_ms"], errors="coerce")
+    d["total_ms"] = d["on_task_ms"] + d["off_task_ms"]
+    d = d.dropna(subset=["total_ms"])
+    d = d[d["total_ms"] > 0]
+    if len(d) < 2:
+        return None
+    d["on_task_ratio"] = d["on_task_ms"] / d["total_ms"]
+    d = d.sort_values("on_task_ratio", ascending=False)
+    best, worst = d.iloc[0], d.iloc[-1]
+    return {
+        "best": {"phase": best["phase"], "on_task_ratio": round(best["on_task_ratio"], 3)},
+        "worst": {"phase": worst["phase"], "on_task_ratio": round(worst["on_task_ratio"], 3)},
+        "spread": round(best["on_task_ratio"] - worst["on_task_ratio"], 3),
+    }
+
+
+def signal_post_response_recovery(dfs):
+    """How long it takes gaze to settle back on the game after each response
+    (postresponse_gaze_recovery_ms, logged per trial in conflict_task_log).
+
+    The raw field is noisier than it looks: it's timestamped from two clocks
+    that drift against each other by a few ms, so most trials -- where gaze
+    was already back on the game -- come out as small positive OR NEGATIVE
+    values clustered near zero, not a clean "time since response." A negative
+    value isn't a real negative duration; it just means recovery was
+    effectively instant. Real recovery events, when they happen, are
+    unmistakably bigger (hundreds to thousands of ms) and rare -- so this
+    reports "how often was there a real pause, and how long was it" instead
+    of a mean, which would blend the near-zero noise floor with a handful of
+    genuine outliers into a number that describes neither."""
+    log = dfs.get("conflict_task_log")
+    if log is None or log.empty or "postresponse_gaze_recovery_ms" not in log.columns:
+        return None
+    vals = pd.to_numeric(log["postresponse_gaze_recovery_ms"], errors="coerce").dropna().clip(lower=0)
+    if len(vals) < 6:
+        return None
+
+    NOTABLE_MS = 100  # below this is jitter around "already on-task"
+    notable = vals[vals >= NOTABLE_MS]
+    if notable.empty:
+        return {"instant": True, "n_trials": int(len(vals))}
+
+    return {
+        "instant": False,
+        "n_trials": int(len(vals)),
+        "notable_frac": round(len(notable) / len(vals), 3),
+        "notable_median_ms": round(notable.median(), 1),
+    }
+
+
+def signal_heart_rate_response(dfs):
+    """Mean raw_bpm during RESTING vs. ACTIVE, straight from main_stream --
+    deliberately just a mean-of-means, not the dashboard's full rolling-
+    window CSI/CVI math, to keep this simple and easy to sanity-check."""
+    main = dfs.get("main_stream")
+    if main is None or main.empty or "phase" not in main.columns or "raw_bpm" not in main.columns:
+        return None
+    df = main.copy()
+    df["raw_bpm"] = pd.to_numeric(df["raw_bpm"], errors="coerce")
+    df = df[df["phase"].isin(["RESTING", "ACTIVE"]) & df["raw_bpm"].notna() & (df["raw_bpm"] > 0)]
+    by_phase = df.groupby("phase")["raw_bpm"].mean()
+    if "RESTING" not in by_phase.index or "ACTIVE" not in by_phase.index:
+        return None
+    resting_bpm, active_bpm = by_phase["RESTING"], by_phase["ACTIVE"]
+    delta_bpm = active_bpm - resting_bpm
+    return {
+        "resting_bpm": round(resting_bpm, 1),
+        "active_bpm": round(active_bpm, 1),
+        "delta_bpm": round(delta_bpm, 1),
+        "delta_frac": round(delta_bpm / resting_bpm, 3) if resting_bpm > 0 else None,
+    }
+
+
+def signal_pacing_steadiness(dfs):
+    """Reaction-time consistency (coefficient of variation) across the game --
+    a steadiness measure independent of accuracy. CV is a standard,
+    scale-free variability statistic; the 0.35 "notably uneven" cutoff is a
+    generic rule of thumb, not derived from the pilot pool (too small and
+    clustered to set this kind of cutoff reliably)."""
+    log = dfs.get("conflict_task_log")
+    if log is None or log.empty or "rt_ms" not in log.columns:
+        return None
+    vals = pd.to_numeric(log["rt_ms"], errors="coerce").dropna()
+    if len(vals) < 8:
+        return None
+    mean = vals.mean()
+    sd = vals.std(ddof=0)
+    return {
+        "mean_rt_ms": round(mean, 1),
+        "sd_rt_ms": round(sd, 1),
+        "cv": round(sd / mean, 3) if mean > 0 else None,
+        "n_trials": int(len(vals)),
+    }
+
+
 # --- recommendation text (parent-facing) ----------------------------------
 #
 # These are written for a parent/caregiver reading a take-home report, not for
@@ -883,4 +996,101 @@ def recommend_distraction(sig):
         f"nearby. Even small changes can make a real difference for a child who's easily pulled away.\n"
         f"- You don't need to fix everything at once. Removing even one distraction at a time is a reasonable "
         f"place to start, and it can take some of the guesswork off your plate."
+    )
+
+
+def recommend_focus_by_phase(sig):
+    if sig is None:
+        return ("Where their attention held best: we didn't get enough of the session across different activities "
+                "to compare focus between them this time. No action needed.")
+
+    best_pct, worst_pct = sig["best"]["on_task_ratio"], sig["worst"]["on_task_ratio"]
+    best_label, worst_label = _phase_label(sig["best"]["phase"]), _phase_label(sig["worst"]["phase"])
+    if sig["spread"] < 0.1:
+        return (
+            f"Where their attention held best: your child's eyes stayed on-task about equally well across "
+            f"everything we tried today — {best_pct:.0%} during {best_label} and {worst_pct:.0%} during "
+            f"{worst_label}. That's a good sign that focus isn't tied to one particular kind of activity."
+        )
+
+    return (
+        f"Where their attention held best: your child's eyes stayed on-task {best_pct:.0%} of the time during "
+        f"{best_label}, compared with {worst_pct:.0%} during {worst_label}. That's a "
+        f"fairly normal difference — some activities naturally hold attention better than others. If you're "
+        f"choosing what to lead with during homework or practice time, starting with something closer to "
+        f"{best_label} in style may help ease them in before moving to trickier or less engaging tasks."
+    )
+
+
+def recommend_recovery(sig):
+    if sig is None:
+        return ("Bouncing back after each turn: we didn't get enough completed rounds with a clear refocus moment "
+                "to see a pattern here this time. No action needed.")
+
+    if sig["instant"]:
+        return ("Bouncing back after each turn: your child's eyes were essentially already back on the game right "
+                "after responding, round after round, with no real lag. That's a good sign of staying engaged with "
+                "the game itself between turns.")
+
+    pct = sig["notable_frac"]
+    seconds = sig["notable_median_ms"] / 1000
+    if sig["notable_frac"] < 0.2:
+        return (
+            f"Bouncing back after each turn: most of the time, your child's eyes were already back on the game "
+            f"right after responding. A handful of rounds (about {pct:.0%}) took a bit longer to refocus — typically "
+            f"around {seconds:.1f} seconds — which is a completely normal, occasional dip in attention during a "
+            f"repetitive game, not something to be concerned about."
+        )
+
+    return (
+        f"Bouncing back after each turn: in about {pct:.0%} of rounds, it took your child a noticeable moment "
+        f"(typically around {seconds:.1f} seconds) to look back at the game after responding. Pauses like this are a "
+        f"normal part of how attention naturally drifts and resets during a repetitive game. If it's helpful, "
+        f"keeping rounds short and spaced out, with a brief pause between them, may make it easier for them to "
+        f"stay with the game between turns."
+    )
+
+
+def recommend_heart_rate_response(sig):
+    if sig is None:
+        return ("Their body's response to the game: we didn't get clear heart-rate readings during both the calm "
+                "video and the game to compare this time. No action needed.")
+
+    if sig["delta_frac"] is None or abs(sig["delta_frac"]) < 0.05:
+        return (
+            f"Their body's response to the game: your child's heart rate stayed fairly steady between the calm "
+            f"video (about {sig['resting_bpm']:.0f} bpm) and the game (about {sig['active_bpm']:.0f} bpm). "
+            f"That's a normal, relaxed response — the game didn't seem to key them up much either way."
+        )
+
+    direction = "rose" if sig["delta_bpm"] > 0 else "dropped"
+    return (
+        f"Their body's response to the game: your child's heart rate {direction} from about "
+        f"{sig['resting_bpm']:.0f} bpm during the calm video to about {sig['active_bpm']:.0f} bpm during the "
+        f"game. A change like this is a completely normal sign of engagement or excitement — bodies naturally "
+        f"rev up a little for something active or attention-demanding, similar to what happens during play or "
+        f"exercise. It's not something to be concerned about on its own; it's just useful context alongside the "
+        f"other patterns in this report."
+    )
+
+
+def recommend_pacing_steadiness(sig):
+    if sig is None:
+        return ("How steady their pace was: we didn't get enough timed responses in the game to look at pacing "
+                "this time. No action needed.")
+
+    seconds = sig["mean_rt_ms"] / 1000
+    if sig["cv"] is None or sig["cv"] < 0.35:
+        return (
+            f"How steady their pace was: your child responded at a fairly steady pace all game, averaging about "
+            f"{seconds:.2f} seconds per round without a lot of swinging between very fast and very slow responses. A "
+            f"steady rhythm like this is a good sign of settled, sustained attention."
+        )
+
+    return (
+        f"How steady their pace was: your child's response times varied quite a bit round to round — "
+        f"averaging about {seconds:.2f} seconds, but with some rounds much faster or slower than others. This kind of "
+        f"up-and-down pacing is common and doesn't mean anything is wrong; it can simply mean attention drifted in "
+        f"and out a little during the game, which is normal for a repetitive task. If it's helpful, keeping rounds "
+        f"short and spaced out (rather than one long stretch) may help even out the pace."
     )
