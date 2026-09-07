@@ -427,16 +427,27 @@ with tab_session:
                 else:
                     st.markdown(f'<span class="flag-na">n/a</span> -- {row["hypothesis"]}', unsafe_allow_html=True)
 
+    def render_recommendation(n, signal_fn, recommend_fn):
+        """Compute + render one recommendation; a bad signal/metric for this
+        particular session shouldn't take down the rest of the report, and
+        Streamlit Cloud redacts real exception text from the UI, so surface
+        it here directly to make production issues diagnosable."""
+        try:
+            text = recommend_fn(signal_fn())
+        except Exception as e:
+            text = f"_Couldn't generate this recommendation ({type(e).__name__}: {e})._"
+        st.markdown(f"{n}. " + text)
+
     st.markdown("#### Personalized recommendations")
-    st.markdown("1. " + pl.recommend_session_length(pl.signal_decline_point(dfs)))
-    st.markdown("2. " + pl.recommend_difficulty(pl.signal_difficulty_sensitivity(dfs)))
-    st.markdown("3. " + pl.recommend_modality(pl.signal_modality(metrics, dfs)))
-    st.markdown("4. " + pl.recommend_transitions(pl.signal_transition_reactivity(dfs)))
-    st.markdown("5. " + pl.recommend_distraction(pl.signal_distraction(dfs)))
-    st.markdown("6. " + pl.recommend_focus_by_phase(pl.signal_focus_by_phase(dfs)))
-    st.markdown("7. " + pl.recommend_recovery(pl.signal_post_response_recovery(dfs)))
-    st.markdown("8. " + pl.recommend_heart_rate_response(pl.signal_heart_rate_response(dfs)))
-    st.markdown("9. " + pl.recommend_pacing_steadiness(pl.signal_pacing_steadiness(dfs)))
+    render_recommendation(1, lambda: pl.signal_decline_point(dfs), pl.recommend_session_length)
+    render_recommendation(2, lambda: pl.signal_difficulty_sensitivity(dfs), pl.recommend_difficulty)
+    render_recommendation(3, lambda: pl.signal_modality(metrics, dfs), pl.recommend_modality)
+    render_recommendation(4, lambda: pl.signal_transition_reactivity(dfs), pl.recommend_transitions)
+    render_recommendation(5, lambda: pl.signal_distraction(dfs), pl.recommend_distraction)
+    render_recommendation(6, lambda: pl.signal_focus_by_phase(dfs), pl.recommend_focus_by_phase)
+    render_recommendation(7, lambda: pl.signal_post_response_recovery(dfs), pl.recommend_recovery)
+    render_recommendation(8, lambda: pl.signal_heart_rate_response(dfs), pl.recommend_heart_rate_response)
+    render_recommendation(9, lambda: pl.signal_pacing_steadiness(dfs), pl.recommend_pacing_steadiness)
 
     st.markdown(
         f'<div class="caution-box">Confidence: LOW -- based on a single session, from a pool of '
