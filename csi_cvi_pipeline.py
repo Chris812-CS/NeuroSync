@@ -982,7 +982,11 @@ def recommend_distraction(sig):
         return ("Their surroundings during focused activities: we didn't track any specific distractions in "
                 "your child's surroundings this session. If there's something in their everyday environment (a "
                 "phone, a window, a sibling nearby) that you suspect pulls their attention away, let us know "
-                "and we can check for that specifically next time.")
+                "and we can check for that specifically next time.\n\n"
+                "In the meantime, one thing worth trying regardless: keep phones, screens, and windows or "
+                "doorways out of your child's direct line of sight during homework or focus time. It's a "
+                "low-effort default that tends to help most children, since moving light and passing activity "
+                "naturally pull young eyes away from what they're supposed to be doing.")
 
     return (
         f"Their surroundings during focused activities: during this session, your child's attention was pulled "
@@ -1010,7 +1014,10 @@ def recommend_focus_by_phase(sig):
         return (
             f"Where their attention held best: your child's eyes stayed on-task about equally well across "
             f"everything we tried today — {best_pct:.0%} during {best_label} and {worst_pct:.0%} during "
-            f"{worst_label}. That's a good sign that focus isn't tied to one particular kind of activity."
+            f"{worst_label}. That's a good sign that focus isn't tied to one particular kind of activity. "
+            f"Since attention doesn't dip for any one type of task, there's no need to warm up with an easier "
+            f"activity first: you can lead with whichever one matters most that day and expect it to go about "
+            f"as well as anything else."
         )
 
     return (
@@ -1039,7 +1046,9 @@ def recommend_recovery(sig):
             f"Bouncing back after each turn: most of the time, your child's eyes were already back on the game "
             f"right after responding. A handful of rounds (about {pct:.0%}) took a bit longer to refocus — typically "
             f"around {seconds:.1f} seconds — which is a completely normal, occasional dip in attention during a "
-            f"repetitive game, not something to be concerned about."
+            f"repetitive game, not something to be concerned about. No changes needed here, but on the rounds "
+            f"where it does take your child a moment to refocus, a short verbal cue right after they answer "
+            f"('nice — now look here') can help them settle back in a little faster."
         )
 
     return (
@@ -1060,7 +1069,9 @@ def recommend_heart_rate_response(sig):
         return (
             f"Their body's response to the game: your child's heart rate stayed fairly steady between the calm "
             f"video (about {sig['resting_bpm']:.0f} bpm) and the game (about {sig['active_bpm']:.0f} bpm). "
-            f"That's a normal, relaxed response — the game didn't seem to key them up much either way."
+            f"That's a normal, relaxed response — the game didn't seem to key them up much either way. No action "
+            f"needed here; it's worth treating this as your child's calm-and-engaged baseline, so a noticeably "
+            f"bigger jump in a future session would be the thing worth mentioning alongside everything else."
         )
 
     direction = "rose" if sig["delta_bpm"] > 0 else "dropped"
@@ -1084,7 +1095,9 @@ def recommend_pacing_steadiness(sig):
         return (
             f"How steady their pace was: your child responded at a fairly steady pace all game, averaging about "
             f"{seconds:.2f} seconds per round without a lot of swinging between very fast and very slow responses. A "
-            f"steady rhythm like this is a good sign of settled, sustained attention."
+            f"steady rhythm like this is a good sign of settled, sustained attention. No changes needed here; if "
+            f"this steady pace holds up across future sessions, it's a good sign the current activity length and "
+            f"format suit your child well right now."
         )
 
     return (
