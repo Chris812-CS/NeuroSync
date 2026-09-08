@@ -49,10 +49,15 @@ METRIC_KEYS = [
 ]
 
 CLUSTER_METRIC_KEYS = [
-    "CSI_resting", "CSI_active",
-    "CVI_first30", "CVI_active", "CVI_overall",
-    "HR_overall", "accuracy", "reaction_time", "BCEA_resting",
-    "adhd_flag_ratio", "autism_flag_ratio",
+    # Kept to the 6 metrics with the largest control-vs-adhd separation
+    # (|z-gap| > ~0.7) on the current 15-session pool. At n=5/group, the
+    # GMM's diagonal covariance is being estimated from too little data to
+    # carry 11 dimensions -- the dropped features (CSI_resting, CVI_first30,
+    # CVI_overall, adhd_flag_ratio, autism_flag_ratio) had near-zero
+    # separating power for control vs. adhd and were diluting the real
+    # signal from these 6. Re-evaluate the z-gaps (see z-scored feature
+    # means by group) if the pool composition changes substantially.
+    "accuracy", "CSI_active", "HR_overall", "BCEA_resting", "reaction_time", "CVI_active",
 ]
 
 GROUP_HYPOTHESES = {
