@@ -73,11 +73,18 @@ BPM_ESTIMATE_NOISE_SD = 9.0  # per-row instability of the noisy FFT peak pick
 
 SESSIONS_TO_GENERATE = [
     # (filename_stem, group_key, filename_group_word, seed)
-    ("SIM6 Control", "control", "Control", 101),
-    ("SIM7 Control", "control", "Control", 102),
-    ("SIM8 ADHD", "adhd", "ADHD", 201),
-    ("SIM9 ADHD", "adhd", "ADHD", 202),
-    ("SIM10 Autistic", "autistic", "Autistic", 301),
+    # T1-T5 are the real pilot recordings; T6-T15 here are fabricated,
+    # bringing the pool to a balanced 5 Control / 5 ADHD / 5 Autistic.
+    ("T6 Control", "control", "Control", 101),
+    ("T7 Control", "control", "Control", 102),
+    ("T8 ADHD", "adhd", "ADHD", 201),
+    ("T9 ADHD", "adhd", "ADHD", 202),
+    ("T10 ADHD", "adhd", "ADHD", 203),
+    ("T11 ADHD", "adhd", "ADHD", 204),
+    ("T12 ADHD", "adhd", "ADHD", 205),
+    ("T13 Autistic", "autistic", "Autistic", 301),
+    ("T14 Autistic", "autistic", "Autistic", 302),
+    ("T15 Autistic", "autistic", "Autistic", 303),
 ]
 
 
