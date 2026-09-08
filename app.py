@@ -329,57 +329,96 @@ with tab_overview:
         st.dataframe(pl.raw_value_table(session_long), use_container_width=True)
 
     st.markdown("### Unsupervised clustering (blind to filename labels)")
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        st.caption(f"Cluster count k={n_clusters} chosen by lowest BIC over k=2..{max_clusters}.")
-        if bic_scores:
-            bic_df = pd.DataFrame({"k": list(bic_scores.keys()), "BIC": list(bic_scores.values())})
-            st.bar_chart(bic_df.set_index("k"), color=TEAL)
-        st.markdown("**Cluster membership confidence**")
-        st.caption("Each row is one session; each cluster_N column is the model's estimated probability "
-                   "that session belongs to that cluster (rows sum to 1). `assigned_cluster` is just the "
-                   "highest-probability cluster for that session. Fit blind to filename labels.")
-        st.dataframe(cluster_probs, use_container_width=True)
-    with c2:
-        st.markdown("**Cluster feature profiles**")
-        st.caption("Own standardized feature signature only -- not a group name.")
-        for col, desc in cluster_profiles.items():
-            lean = f"  ·  leans **{cluster_group_lean.get(col, '?')}**" if reveal else ""
-            st.markdown(f"- `{col}`: {desc}{lean}")
+    st.caption(f"The model groups the {len(session_results)} sessions by feature similarity alone -- it never "
+               f"sees filename labels. It settled on **k={n_clusters} clusters** (lowest BIC over "
+               f"k=2..{max_clusters}).")
+
+    # ---- one card per cluster: n members, group lean (if revealed), top features ----
+    GROUP_LEAN_COLORS = {"control": GREEN, "adhd": AMBER, "autistic": RED}
+    cards_per_row = min(len(prob_cols), 4)
+    for row_start in range(0, len(prob_cols), cards_per_row):
+        row_cols = st.columns(cards_per_row)
+        for i, col_name in enumerate(prob_cols[row_start:row_start + cards_per_row]):
+            n_members = int((cluster_probs["assigned_cluster"] == col_name).sum())
+            lean = cluster_group_lean.get(col_name)
+            with row_cols[i]:
+                if reveal and lean in GROUP_LEAN_COLORS:
+                    accent = GROUP_LEAN_COLORS[lean][0]
+                    match_n = int(crosscheck.loc[lean, col_name])
+                    header_html = (
+                        f'<div style="font-size:1.05rem;font-weight:700;color:{NAVY}">'
+                        f'{GROUP_DISPLAY_NAMES.get(lean, lean)}</div>'
+                        f'<div style="font-size:0.75rem;color:{SLATE}">{match_n}/{n_members} labeled {lean}</div>'
+                    )
+                else:
+                    accent = SLATE
+                    header_html = f'<div style="font-size:1.0rem;font-weight:700;color:{NAVY}">Unlabeled</div>'
+                st.markdown(
+                    f'<div class="metric-card" style="border-left-color:{accent};min-height:172px;margin-bottom:10px">'
+                    f'<div style="font-size:0.72rem;color:{SLATE};text-transform:uppercase;letter-spacing:0.03em">'
+                    f'{col_name} &middot; n={n_members}</div>'
+                    f'{header_html}'
+                    f'<div style="font-size:0.8rem;color:{SLATE};margin-top:8px;line-height:1.4">'
+                    f'{cluster_profiles[col_name]}</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+    predicted_groups = cluster_probs["assigned_cluster"].map(cluster_group_lean)
+    actual_groups = pd.Series({sid: res["group"] for sid, res in session_results.items()})
+    match_results = pd.Series(
+        [pl.match_result(actual_groups[sid], predicted_groups[sid]) for sid in cluster_probs.index],
+        index=cluster_probs.index,
+    )
+    n_correct = int((match_results == True).sum())
+    n_partial = int((match_results == "partial").sum())
+    n_total = len(match_results)
 
     if reveal:
-        st.markdown("### 🔓 Group reveal & crosscheck")
+        st.markdown("#### 🔓 Group reveal & crosscheck")
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.markdown(f'<div class="metric-card" style="border-left-color:{GREEN[0]}">'
+                        f'<div style="font-size:0.8rem;color:{SLATE}">Exact matches</div>'
+                        f'<div style="font-size:1.6rem;font-weight:700;color:{NAVY}">{n_correct}/{n_total}</div></div>',
+                        unsafe_allow_html=True)
+        with m2:
+            st.markdown(f'<div class="metric-card" style="border-left-color:{AMBER[0]}">'
+                        f'<div style="font-size:0.8rem;color:{SLATE}">Partial (comorbid)</div>'
+                        f'<div style="font-size:1.6rem;font-weight:700;color:{NAVY}">{n_partial}/{n_total}</div></div>',
+                        unsafe_allow_html=True)
+        with m3:
+            n_leaned = len(set(cluster_group_lean.values()) & set(GROUP_LEAN_COLORS))
+            st.markdown(f'<div class="metric-card" style="border-left-color:{RED[0]}">'
+                        f'<div style="font-size:0.8rem;color:{SLATE}">Distinct group leans</div>'
+                        f'<div style="font-size:1.6rem;font-weight:700;color:{NAVY}">{n_leaned}/{len(prob_cols)} clusters</div></div>',
+                        unsafe_allow_html=True)
+
         st.markdown('<div class="caution-box">cluster→group lean was derived by majority vote over this '
                     'same small pool, so matching predictions against it is partly circular -- a pilot '
                     'sanity check, not independent validation.</div>', unsafe_allow_html=True)
 
-        rows = []
-        for sid, res in session_results.items():
-            assigned = cluster_probs.loc[sid, "assigned_cluster"]
-            predicted = cluster_group_lean[assigned]
-            actual = res["group"]
-            rows.append({
-                "participant": sid, "actual_group": actual, "assigned_cluster": assigned,
-                "predicted_group": predicted, "correct": pl.match_result(actual, predicted),
-            })
-        accuracy_df = pd.DataFrame(rows).set_index("participant")
-        n_correct = (accuracy_df["correct"] == True).sum()
-        n_partial = (accuracy_df["correct"] == "partial").sum()
-        n_total = len(accuracy_df)
-
-        cc1, cc2 = st.columns(2)
-        with cc1:
-            st.markdown(f"**Prediction accuracy:** {n_correct}/{n_total} exact · {n_partial}/{n_total} partial (comorbid)")
-            st.dataframe(accuracy_df, use_container_width=True)
-        with cc2:
-            st.markdown("**Cross-tab: cluster vs. filename group**")
+        with st.expander("Cross-tab: cluster vs. filename group"):
             st.dataframe(crosscheck, use_container_width=True)
-            legend_lines = []
-            for col in prob_cols:
-                lean = cluster_group_lean.get(col, "?")
-                legend_lines.append(f"*{col}: leans **{lean}** -- {cluster_profiles[col]}*")
-            st.caption("  \n".join(legend_lines))
 
+    with st.expander("Session-by-session cluster assignment & full probabilities"):
+        table = cluster_probs.copy()
+        table.insert(0, "confidence", cluster_probs[prob_cols].max(axis=1))
+        if reveal:
+            table.insert(0, "actual_group", actual_groups)
+            table.insert(2, "predicted_group", predicted_groups)
+            table.insert(3, "match", match_results)
+        st.caption("`confidence` is the model's estimated probability for the assigned cluster; the "
+                   "cluster_N columns are the full per-cluster probabilities (rows sum to 1).")
+        st.dataframe(table.style.format({"confidence": "{:.0%}"}), use_container_width=True)
+
+    with st.expander("How was k chosen? (BIC)"):
+        if bic_scores:
+            bic_df = pd.DataFrame({"k": list(bic_scores.keys()), "BIC": list(bic_scores.values())})
+            st.bar_chart(bic_df.set_index("k"), color=TEAL)
+        st.caption("Lower BIC = better fit, penalized for model complexity. k is picked automatically as "
+                   f"the lowest-BIC option over k=2..{max_clusters}.")
+
+    if reveal:
         st.markdown("#### Hidden flag-ratios vs. revealed group")
         flag_ratio_by_group = session_long[["participant", "adhd_flag_ratio", "autism_flag_ratio"]].copy()
         flag_ratio_by_group["group"] = flag_ratio_by_group["participant"].map(group_for_crosscheck)
