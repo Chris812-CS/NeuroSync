@@ -197,6 +197,64 @@ def style_pool_table(annotated_df, z_df):
     return annotated_df.style.apply(styler, axis=None)
 
 
+GROUP_DISPLAY_NAMES = {"control": "Control", "adhd": "ADHD", "autistic": "Autistic", "autistic_adhd": "Autistic+ADHD"}
+GROUP_ORDER = ["control", "adhd", "autistic", "autistic_adhd"]
+_jitter_rng = np.random.default_rng(42)
+
+
+def render_group_comparison_chart(df, metrics, metric_labels, colors, ylabel, title, pct=False):
+    """Grouped bar chart of per-group means (+/- SD) for one or more metrics,
+    with individual session values overlaid as dots -- with only a handful of
+    sessions per group, a bar-and-error-bar alone would imply more
+    statistical confidence than the pool actually supports."""
+    groups_present = [g for g in GROUP_ORDER if g in df["group"].unique()]
+    if not groups_present:
+        return None
+
+    n_groups, n_metrics = len(groups_present), len(metrics)
+    x = np.arange(n_groups)
+    width = 0.7 / n_metrics
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.5), facecolor=NAVY)
+    ax.set_facecolor(NAVY)
+
+    for i, (metric, label, color) in enumerate(zip(metrics, metric_labels, colors)):
+        offset = (i - (n_metrics - 1) / 2) * width
+        bar_x = x + offset
+        means, sds, per_group_vals = [], [], []
+        for g in groups_present:
+            vals = df.loc[df["group"] == g, metric].dropna()
+            vals = vals * 100 if pct else vals
+            per_group_vals.append(vals)
+            means.append(vals.mean() if len(vals) else np.nan)
+            sds.append(vals.std() if len(vals) > 1 else 0)
+        ax.bar(bar_x, means, width, yerr=sds, label=label, color=color, zorder=3,
+               capsize=4, error_kw={"ecolor": PALE, "elinewidth": 1})
+        for gi, vals in enumerate(per_group_vals):
+            if len(vals) == 0:
+                continue
+            jitter = (_jitter_rng.random(len(vals)) - 0.5) * width * 0.5
+            ax.scatter(np.full(len(vals), bar_x[gi]) + jitter, vals, color="white",
+                       edgecolor=NAVY, s=22, zorder=4, linewidth=0.6)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(
+        [f"{GROUP_DISPLAY_NAMES.get(g, g)}\n(n={df.loc[df['group'] == g, 'participant'].nunique()})"
+         for g in groups_present],
+        fontsize=10, color="white",
+    )
+    ax.set_ylabel(ylabel, fontsize=11, color=PALE)
+    ax.set_title(title, fontsize=12, color="white", fontweight="bold", pad=14)
+    ax.spines[:].set_visible(False)
+    ax.tick_params(colors=PALE, labelsize=9)
+    ax.yaxis.grid(True, color=SLATE, alpha=0.25, zorder=0)
+    ax.set_axisbelow(True)
+    if n_metrics > 1:
+        ax.legend(loc="best", frameon=False, fontsize=9, labelcolor=PALE)
+    plt.tight_layout()
+    return fig
+
+
 if not data_dir_str:
     st.title("CSI/CVI Unknown-Group Dashboard")
     st.info("Enter a data folder path in the sidebar to get started.")
@@ -328,6 +386,68 @@ with tab_overview:
         flag_summary = flag_ratio_by_group.groupby("group")[["adhd_flag_ratio", "autism_flag_ratio"]].mean().round(3)
         flag_summary["n"] = flag_ratio_by_group.groupby("group").size()
         st.dataframe(flag_summary, use_container_width=True)
+
+        st.markdown("### Group averages: Control vs. Autistic")
+        st.caption("Mean +/- SD per group, with each session plotted as a dot. With only a handful of sessions "
+                   "per group, treat these as descriptive comparisons for this pilot pool, not statistically "
+                   "validated group differences.")
+        session_long_grouped = session_long.copy()
+        session_long_grouped["group"] = session_long_grouped["participant"].map(group_for_crosscheck)
+
+        gc1, gc2 = st.columns(2)
+        with gc1:
+            fig = render_group_comparison_chart(
+                session_long_grouped, ["CSI_resting", "CSI_active"], ["Resting", "Active"], [TEAL, CORAL],
+                "CSI (Cardiac Sympathetic Index)", "CSI: resting vs. active, by group",
+            )
+            if fig:
+                st.pyplot(fig, use_container_width=True)
+        with gc2:
+            fig = render_group_comparison_chart(
+                session_long_grouped, ["CVI_first30", "CVI_overall"], ["First 30s", "Overall"], [BLUE[0], GREEN[0]],
+                "CVI (Cardiac Vagal Index)", "CVI: first 30s vs. overall, by group",
+            )
+            if fig:
+                st.pyplot(fig, use_container_width=True)
+
+        gc3, gc4 = st.columns(2)
+        with gc3:
+            fig = render_group_comparison_chart(
+                session_long_grouped, ["HR_overall"], ["HR overall"], [AMBER[0]],
+                "Heart rate (bpm)", "Heart rate, by group",
+            )
+            if fig:
+                st.pyplot(fig, use_container_width=True)
+        with gc4:
+            fig = render_group_comparison_chart(
+                session_long_grouped, ["BCEA_resting"], ["BCEA resting"], [RED[0]],
+                "BCEA (gaze instability)", "Gaze instability (resting), by group",
+            )
+            if fig:
+                st.pyplot(fig, use_container_width=True)
+
+        gc5, gc6 = st.columns(2)
+        with gc5:
+            fig = render_group_comparison_chart(
+                session_long_grouped, ["accuracy"], ["Accuracy"], [GREEN[0]],
+                "Accuracy (%)", "Task accuracy, by group", pct=True,
+            )
+            if fig:
+                st.pyplot(fig, use_container_width=True)
+        with gc6:
+            fig = render_group_comparison_chart(
+                session_long_grouped, ["reaction_time"], ["Reaction time"], [BLUE[0]],
+                "Reaction time (ms)", "Reaction time, by group",
+            )
+            if fig:
+                st.pyplot(fig, use_container_width=True)
+
+        fig = render_group_comparison_chart(
+            session_long_grouped, ["adhd_flag_ratio", "autism_flag_ratio"], ["ADHD flag ratio", "Autism flag ratio"],
+            [AMBER[0], RED[0]], "Flag ratio (%)", "Hidden hypothesis flag ratios, by group", pct=True,
+        )
+        if fig:
+            st.pyplot(fig, use_container_width=True)
 
         st.markdown("#### CSI phase shift by session")
         chart_sessions = list(session_results.keys())
