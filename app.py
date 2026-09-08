@@ -255,6 +255,53 @@ def render_group_comparison_chart(df, metrics, metric_labels, colors, ylabel, ti
     return fig
 
 
+def interpret_group_metric(df, metric, unit="", pct=False, decimals=1):
+    """One-sentence plain-language comparison of Control vs. ADHD/Autistic
+    means for a single metric, computed from the live data -- not static
+    text. Returns None if there's not enough data to compare."""
+    means = {}
+    for g in GROUP_ORDER:
+        vals = df.loc[df["group"] == g, metric].dropna()
+        if len(vals):
+            means[g] = vals.mean() * (100 if pct else 1)
+    if "control" not in means or len(means) < 2:
+        return None
+    base = means["control"]
+    parts = [f"Control averages {base:.{decimals}f}{unit}"]
+    for g in ("adhd", "autistic"):
+        if g not in means or base == 0:
+            continue
+        diff_pct = (means[g] - base) / abs(base) * 100
+        if round(abs(diff_pct)) == 0:
+            comparison = "about the same as Control"
+        else:
+            direction = "higher" if means[g] > base else "lower"
+            comparison = f"{abs(diff_pct):.0f}% {direction} than Control"
+        parts.append(f"{GROUP_DISPLAY_NAMES[g]} averages {means[g]:.{decimals}f}{unit} ({comparison})")
+    if len(parts) < 2:
+        return None
+    return "; ".join(parts) + "."
+
+
+def interpret_group_shift(df, metric_a, metric_b, label_a, label_b, unit="", decimals=2):
+    """Plain-language read of a within-group shift between two metrics
+    (e.g. resting -> active) across groups, for the two-metric comparison
+    charts (CSI, CVI)."""
+    lines = []
+    for g in GROUP_ORDER:
+        vals_a = df.loc[df["group"] == g, metric_a].dropna()
+        vals_b = df.loc[df["group"] == g, metric_b].dropna()
+        if len(vals_a) == 0 or len(vals_b) == 0:
+            continue
+        a, b = vals_a.mean(), vals_b.mean()
+        direction = "rises" if b > a else ("drops" if b < a else "stays flat")
+        lines.append(f"{GROUP_DISPLAY_NAMES[g]} {direction} from {a:.{decimals}f} ({label_a}) "
+                     f"to {b:.{decimals}f} ({label_b}){unit}")
+    if len(lines) < 2:
+        return None
+    return "; ".join(lines) + "."
+
+
 if not data_dir_str:
     st.title("CSI/CVI Unknown-Group Dashboard")
     st.info("Enter a data folder path in the sidebar to get started.")
@@ -325,6 +372,13 @@ with tab_overview:
                "green = near median, blue = below, amber = above, red = notable outlier either way.")
     st.dataframe(style_pool_table(annotated_table, z_scores), use_container_width=True)
 
+    _outlier_counts = (z_scores.abs() >= 1).sum(axis=1)
+    if _outlier_counts.max() > 0:
+        _top_metric = _outlier_counts.idxmax()
+        st.caption(f"**What this shows:** `{_top_metric}` has the most spread across this pool -- "
+                   f"{int(_outlier_counts[_top_metric])} of {z_scores.shape[1]} sessions land as notable "
+                   f"outliers (|z|>=1, red/blue cells) on it. Green cells cluster near the pool median.")
+
     with st.expander("Raw metric values"):
         st.dataframe(pl.raw_value_table(session_long), use_container_width=True)
 
@@ -393,6 +447,13 @@ with tab_overview:
                         f'<div style="font-size:1.6rem;font-weight:700;color:{NAVY}">{n_leaned}/{len(prob_cols)} clusters</div></div>',
                         unsafe_allow_html=True)
 
+        _match_rate = n_correct / n_total if n_total else 0
+        _match_read = "lines up well with" if _match_rate >= 0.7 else ("only partly overlaps" if _match_rate >= 0.4 else "barely overlaps with")
+        st.caption(f"**What this shows:** fit with no knowledge of the filename labels, the model's blind "
+                   f"grouping {_match_read} the revealed labels for this pool ({n_correct}/{n_total} exact "
+                   f"matches). That's a sign the underlying metrics separate these groups reasonably well here "
+                   f"-- not proof it would generalize beyond this pilot pool.")
+
         st.markdown('<div class="caution-box">cluster→group lean was derived by majority vote over this '
                     'same small pool, so matching predictions against it is partly circular -- a pilot '
                     'sanity check, not independent validation.</div>', unsafe_allow_html=True)
@@ -425,6 +486,17 @@ with tab_overview:
         flag_summary = flag_ratio_by_group.groupby("group")[["adhd_flag_ratio", "autism_flag_ratio"]].mean().round(3)
         flag_summary["n"] = flag_ratio_by_group.groupby("group").size()
         st.dataframe(flag_summary, use_container_width=True)
+        if not flag_summary.empty:
+            _top_adhd = flag_summary["adhd_flag_ratio"].idxmax()
+            _top_autism = flag_summary["autism_flag_ratio"].idxmax()
+            st.caption(
+                f"**What this shows:** {GROUP_DISPLAY_NAMES.get(_top_adhd, _top_adhd)} sessions trigger the "
+                f"hidden within-session ADHD-pattern checks most often "
+                f"({flag_summary.loc[_top_adhd, 'adhd_flag_ratio']:.0%} of checks); "
+                f"{GROUP_DISPLAY_NAMES.get(_top_autism, _top_autism)} sessions trigger the autism-pattern "
+                f"checks most often ({flag_summary.loc[_top_autism, 'autism_flag_ratio']:.0%}). These flags were "
+                "computed blind to the group label -- this table is what happens when you line them up "
+                "afterward.")
 
         st.markdown("### Group averages: Control vs. Autistic")
         st.caption("Mean +/- SD per group, with each session plotted as a dot. With only a handful of sessions "
@@ -441,6 +513,9 @@ with tab_overview:
             )
             if fig:
                 st.pyplot(fig, use_container_width=True)
+                interp = interpret_group_shift(session_long_grouped, "CSI_resting", "CSI_active", "resting", "active")
+                if interp:
+                    st.caption(f"**What this shows:** {interp}")
         with gc2:
             fig = render_group_comparison_chart(
                 session_long_grouped, ["CVI_first30", "CVI_overall"], ["First 30s", "Overall"], [BLUE[0], GREEN[0]],
@@ -448,6 +523,9 @@ with tab_overview:
             )
             if fig:
                 st.pyplot(fig, use_container_width=True)
+                interp = interpret_group_shift(session_long_grouped, "CVI_first30", "CVI_overall", "first 30s", "overall")
+                if interp:
+                    st.caption(f"**What this shows:** {interp}")
 
         gc3, gc4 = st.columns(2)
         with gc3:
@@ -457,6 +535,9 @@ with tab_overview:
             )
             if fig:
                 st.pyplot(fig, use_container_width=True)
+                interp = interpret_group_metric(session_long_grouped, "HR_overall", unit=" bpm")
+                if interp:
+                    st.caption(f"**What this shows:** {interp}")
         with gc4:
             fig = render_group_comparison_chart(
                 session_long_grouped, ["BCEA_resting"], ["BCEA resting"], [RED[0]],
@@ -464,6 +545,9 @@ with tab_overview:
             )
             if fig:
                 st.pyplot(fig, use_container_width=True)
+                interp = interpret_group_metric(session_long_grouped, "BCEA_resting")
+                if interp:
+                    st.caption(f"**What this shows:** {interp}")
 
         gc5, gc6 = st.columns(2)
         with gc5:
@@ -473,6 +557,9 @@ with tab_overview:
             )
             if fig:
                 st.pyplot(fig, use_container_width=True)
+                interp = interpret_group_metric(session_long_grouped, "accuracy", unit="%", pct=True, decimals=0)
+                if interp:
+                    st.caption(f"**What this shows:** {interp}")
         with gc6:
             fig = render_group_comparison_chart(
                 session_long_grouped, ["reaction_time"], ["Reaction time"], [BLUE[0]],
@@ -480,6 +567,9 @@ with tab_overview:
             )
             if fig:
                 st.pyplot(fig, use_container_width=True)
+                interp = interpret_group_metric(session_long_grouped, "reaction_time", unit=" ms", decimals=0)
+                if interp:
+                    st.caption(f"**What this shows:** {interp}")
 
         fig = render_group_comparison_chart(
             session_long_grouped, ["adhd_flag_ratio", "autism_flag_ratio"], ["ADHD flag ratio", "Autism flag ratio"],
@@ -487,8 +577,18 @@ with tab_overview:
         )
         if fig:
             st.pyplot(fig, use_container_width=True)
+            adhd_interp = interpret_group_metric(session_long_grouped, "adhd_flag_ratio", unit="%", pct=True, decimals=0)
+            autism_interp = interpret_group_metric(session_long_grouped, "autism_flag_ratio", unit="%", pct=True, decimals=0)
+            interp = " ".join(x for x in [adhd_interp, autism_interp] if x)
+            if interp:
+                st.caption(f"**What this shows:** {interp} A higher flag ratio means more of that group's "
+                           "*within-session* hypothesis checks (e.g. resting vs. active CSI) came out YES -- "
+                           "it's a pattern count, not a severity score.")
 
         st.markdown("#### CSI phase shift by session")
+        st.caption("Same CSI resting-vs-active comparison as above, but per individual session instead of "
+                   "averaged by group -- useful for spotting whether a group's average is driven by every "
+                   "session or by one or two outliers.")
         chart_sessions = list(session_results.keys())
         labels = [f"{sid}\n({session_results[sid]['group']})" for sid in chart_sessions]
         resting = [session_results[sid]["metrics"].get("CSI_resting") for sid in chart_sessions]
@@ -520,6 +620,18 @@ with tab_overview:
         ax.legend(loc="upper right", frameon=False, fontsize=10, labelcolor=PALE)
         plt.tight_layout()
         st.pyplot(fig, use_container_width=True)
+
+        n_rise = sum(1 for sid in chart_sessions
+                     if pd.notna(session_results[sid]["metrics"].get("CSI_resting"))
+                     and pd.notna(session_results[sid]["metrics"].get("CSI_active"))
+                     and session_results[sid]["metrics"]["CSI_active"] > session_results[sid]["metrics"]["CSI_resting"])
+        n_comparable = sum(1 for sid in chart_sessions
+                           if pd.notna(session_results[sid]["metrics"].get("CSI_resting"))
+                           and pd.notna(session_results[sid]["metrics"].get("CSI_active")))
+        if n_comparable:
+            st.caption(f"**What this shows:** CSI rises from resting to active in {n_rise}/{n_comparable} "
+                       f"sessions with both phases logged. A session bucking that pattern is worth a second "
+                       f"look in the Session detail tab rather than assumed to be an error.")
     else:
         st.info("Flip **Reveal filename-derived groups** in the sidebar to see group labels, cluster crosscheck "
                 "accuracy, and the CSI phase-shift chart.")
