@@ -325,12 +325,12 @@ def interpret_group_shift(df, metric_a, metric_b, label_a, label_b, unit="", dec
 def rank_group_insights(df, specs, top_n=5, pairs=None):
     """Rank single-value metrics by the size of the biggest relative
     difference between any two groups present -- not just vs. Control --
-    and return the top N as HTML bullet strings. Each metric contributes
-    at most one bullet: whichever pair (e.g. vs. Control, or ADHD vs.
-    Autistic) shows the largest deviation for that metric. A data-driven
-    "what stands out" summary instead of a fixed editorial claim, so it
-    stays honest as the pool grows or changes.
-    specs: list of (metric, label, unit, pct, decimals)."""
+    to decide which metrics are worth surfacing. The bullet TEXT for each
+    picked metric is the full interpret_group_metric() sentence (every
+    group vs. Control, plus ADHD-vs-Autistic), not just the winning pair --
+    so this summary never hides a comparison that's shown in more detail
+    in the charts below it; ranking only decides which metrics make the
+    cut. specs: list of (metric, label, unit, pct, decimals)."""
     if pairs is None:
         pairs = [("adhd", "control"), ("autistic", "control"), ("adhd", "autistic")]
 
@@ -341,26 +341,21 @@ def rank_group_insights(df, specs, top_n=5, pairs=None):
             vals = df.loc[df["group"] == g, metric].dropna()
             if len(vals):
                 means[g] = vals.mean() * (100 if pct else 1)
+        best_abs_diff = 0.0
         for g, base_g in pairs:
             if g not in means or base_g not in means or means[base_g] == 0:
                 continue
-            base = means[base_g]
-            diff_pct = (means[g] - base) / abs(base) * 100
-            scored.append((abs(diff_pct), diff_pct, metric, label, unit, decimals, g, means[g], base_g, base))
+            diff_pct = abs((means[g] - means[base_g]) / abs(means[base_g]) * 100)
+            best_abs_diff = max(best_abs_diff, diff_pct)
+        if best_abs_diff >= 1:
+            scored.append((best_abs_diff, metric, label, unit, pct, decimals))
 
     scored.sort(key=lambda row: row[0], reverse=True)
-    bullets, seen_metrics = [], set()
-    for abs_diff, diff_pct, metric, label, unit, decimals, g, val, base_g, base in scored:
-        if metric in seen_metrics or abs_diff < 1:
-            continue
-        seen_metrics.add(metric)
-        direction = "higher" if diff_pct > 0 else "lower"
-        bullets.append(
-            f"<b>{label}:</b> {GROUP_DISPLAY_NAMES[g]} averages {val:.{decimals}f}{unit}, "
-            f"{abs(diff_pct):.0f}% {direction} than {GROUP_DISPLAY_NAMES[base_g]} ({base:.{decimals}f}{unit})."
-        )
-        if len(bullets) >= top_n:
-            break
+    bullets = []
+    for _, metric, label, unit, pct, decimals in scored[:top_n]:
+        sentence = interpret_group_metric(df, metric, unit=unit, pct=pct, decimals=decimals)
+        if sentence:
+            bullets.append(f"<b>{label}:</b> {sentence}")
     return bullets
 
 
@@ -551,13 +546,34 @@ with tab_compare:
                "diverge, where they don't, and whether a group average is driven by every session or by one "
                "or two outliers. Requires **Reveal filename-derived groups** in the sidebar.")
 
+    with st.expander("What are the \"hidden flags\"?"):
+        st.markdown(
+            "Every session automatically runs a handful of **literature-derived, within-session checks** -- "
+            "small yes/no tests of whether that session's own signal moves in the direction published ADHD/"
+            "autism research associates with each condition. They're computed **blind to the filename label**; "
+            "only afterward does this tab line the results up against the revealed group, as a sanity check.\n\n"
+            "**Included in `adhd_flag_ratio`** (share of these 3 that came out YES):\n"
+            "- CSI is lower in the resting phase than the active phase\n"
+            "- CSI is reduced in the passive phase vs. the active phase\n"
+            "- Eye speed stays about the same right before vs. right after a sound cue\n\n"
+            "**Included in `autism_flag_ratio`** (share of these 2 that came out YES):\n"
+            "- CVI is lower in the first 30 seconds than the rest of the session\n"
+            "- CVI is reduced in the active phase vs. the passive phase\n\n"
+            "A few other literature-associated values (accuracy, heart rate, BCEA, reaction time, CVI overall) "
+            "are tracked per session too, but need a second session to compare against, so they're **not** "
+            "counted in these ratios -- they show up as raw values in the Session detail tab's hypothesis "
+            "checks instead."
+        )
+
     if reveal:
         session_long_grouped = session_long.copy()
         session_long_grouped["group"] = session_long_grouped["participant"].map(group_for_crosscheck)
 
         insight_specs = [
-            ("HR_overall", "Heart rate", " bpm", False, 1),
+            ("HR_resting", "Heart rate (resting)", " bpm", False, 1),
+            ("HR_overall", "Heart rate (overall)", " bpm", False, 1),
             ("BCEA_resting", "Gaze instability (BCEA, resting)", "", False, 2),
+            ("BCEA_overall", "Gaze instability (BCEA, overall)", "", False, 2),
             ("accuracy", "Task accuracy", "%", True, 0),
             ("reaction_time", "Reaction time", " ms", False, 0),
             ("adhd_flag_ratio", "ADHD hidden-flag ratio", "%", True, 0),
@@ -572,8 +588,8 @@ with tab_compare:
                 f'<ul style="margin:0;padding-left:20px;color:#3d5666;font-size:0.9rem;line-height:1.75">'
                 + "".join(f"<li>{b}</li>" for b in insights) +
                 f'</ul><div style="font-size:0.75rem;color:{SLATE};margin-top:10px;padding-top:8px;'
-                f'border-top:1px dashed {PALE}">Ranked by size of deviation from Control in this pool -- '
-                f"descriptive for this pilot's sessions, not a statistically validated claim.</div></div>",
+                f'border-top:1px dashed {PALE}">Ranked by size of the largest deviation between any two groups '
+                f"in this pool -- descriptive for this pilot's sessions, not a statistically validated claim.</div></div>",
                 unsafe_allow_html=True,
             )
 
@@ -632,22 +648,22 @@ with tab_compare:
         gc3, gc4 = st.columns(2)
         with gc3:
             fig = render_group_comparison_chart(
-                session_long_grouped, ["HR_overall"], ["HR overall"], [AMBER[0]],
-                "Heart rate (bpm)", "Heart rate, by group",
+                session_long_grouped, ["HR_resting", "HR_overall"], ["Resting", "Overall"], [BLUE[0], AMBER[0]],
+                "Heart rate (bpm)", "Heart rate: resting vs. overall, by group",
             )
             if fig:
                 st.pyplot(fig, use_container_width=True)
-                interp = interpret_group_metric(session_long_grouped, "HR_overall", unit=" bpm")
+                interp = interpret_group_shift(session_long_grouped, "HR_resting", "HR_overall", "resting", "overall", unit=" bpm")
                 if interp:
                     st.caption(f"**What this shows:** {interp}")
         with gc4:
             fig = render_group_comparison_chart(
-                session_long_grouped, ["BCEA_resting"], ["BCEA resting"], [RED[0]],
-                "BCEA (gaze instability)", "Gaze instability (resting), by group",
+                session_long_grouped, ["BCEA_resting", "BCEA_overall"], ["Resting", "Overall"], [TEAL, RED[0]],
+                "BCEA (gaze instability)", "Gaze instability: resting vs. overall, by group",
             )
             if fig:
                 st.pyplot(fig, use_container_width=True)
-                interp = interpret_group_metric(session_long_grouped, "BCEA_resting")
+                interp = interpret_group_shift(session_long_grouped, "BCEA_resting", "BCEA_overall", "resting", "overall")
                 if interp:
                     st.caption(f"**What this shows:** {interp}")
 
