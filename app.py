@@ -345,7 +345,7 @@ st.title("CSI/CVI Unknown-Group Dashboard")
 st.caption(f"{len(session_results)} session(s) loaded · window={window_sec:.0f}s · "
            f"clusters found: {n_clusters}")
 
-tab_overview, tab_session = st.tabs(["📊 Overview", "🧾 Session detail"])
+tab_overview, tab_compare, tab_session = st.tabs(["📊 Overview", "📈 Group comparison", "🧾 Session detail"])
 
 
 # ------------------------------------------------------------------
@@ -479,6 +479,16 @@ with tab_overview:
         st.caption("Lower BIC = better fit, penalized for model complexity. k is picked automatically as "
                    f"the lowest-BIC option over k=2..{max_clusters}.")
 
+
+# ------------------------------------------------------------------
+# GROUP COMPARISON TAB
+# ------------------------------------------------------------------
+with tab_compare:
+    st.markdown("### Direct group comparison")
+    st.caption("Side-by-side metrics across the revealed groups in this pool -- where the groups' averages "
+               "diverge, where they don't, and whether a group average is driven by every session or by one "
+               "or two outliers. Requires **Reveal filename-derived groups** in the sidebar.")
+
     if reveal:
         st.markdown("#### Hidden flag-ratios vs. revealed group")
         flag_ratio_by_group = session_long[["participant", "adhd_flag_ratio", "autism_flag_ratio"]].copy()
@@ -498,7 +508,7 @@ with tab_overview:
                 "computed blind to the group label -- this table is what happens when you line them up "
                 "afterward.")
 
-        st.markdown("### Group averages: Control vs. Autistic")
+        st.markdown("### Group averages")
         st.caption("Mean +/- SD per group, with each session plotted as a dot. With only a handful of sessions "
                    "per group, treat these as descriptive comparisons for this pilot pool, not statistically "
                    "validated group differences.")
@@ -633,8 +643,8 @@ with tab_overview:
                        f"sessions with both phases logged. A session bucking that pattern is worth a second "
                        f"look in the Session detail tab rather than assumed to be an error.")
     else:
-        st.info("Flip **Reveal filename-derived groups** in the sidebar to see group labels, cluster crosscheck "
-                "accuracy, and the CSI phase-shift chart.")
+        st.info("Flip **Reveal filename-derived groups** in the sidebar to see the group-by-group metric "
+                "comparisons and the CSI phase-shift chart.")
 
 
 # ------------------------------------------------------------------
