@@ -705,13 +705,15 @@ with tab_session:
         "none": (SLATE, "#EEF2F3", SLATE, "Not enough data"),
     }
 
-    def render_recommendation_card(col, n, icon, short_title, signal_fn, recommend_fn, status_fn, headline_fn):
+    def render_recommendation_card(col, n, icon, short_title, signal_fn, recommend_fn, status_fn, headline_fn, action_fn):
         """Card-style recommendation: icon + short title + color-coded status
-        pill + a headline stat pulled straight from the signal dict (not
-        text-parsed, so it can't drift from the underlying numbers), the
-        lead sentence always visible, and the rest -- including any "things
-        to try" checklist already in the text -- one click away so the card
-        reads at a glance instead of as a wall of text.
+        pill + a plain-language headline stat pulled straight from the signal
+        dict (not text-parsed, so it can't drift from the underlying
+        numbers, and no ms/RMSSD/CV-style jargon), the lead sentence, and a
+        hand-written "what to do" line surfaced directly on the card instead
+        of buried in a paragraph. The full original wording -- including any
+        "things to try" checklist -- stays one click away for anyone who
+        wants the complete explanation.
 
         A bad signal/metric for this particular session shouldn't take down
         the rest of the report, and Streamlit Cloud redacts real exception
@@ -722,8 +724,9 @@ with tab_session:
             text = recommend_fn(sig)
             status = status_fn(sig)
             headline = headline_fn(sig)
+            action = action_fn(sig)
         except Exception as e:
-            sig, status, headline = None, "none", None
+            sig, status, headline, action = None, "none", None, None
             text = f"Couldn't generate this recommendation ({type(e).__name__}: {e})."
 
         accent, bg, fg, status_label = STATUS_STYLE[status]
@@ -734,7 +737,7 @@ with tab_session:
 
         with col:
             st.markdown(
-                f'<div class="metric-card" style="border-left-color:{accent};margin-bottom:14px;min-height:150px">'
+                f'<div class="metric-card" style="border-left-color:{accent};margin-bottom:14px;min-height:190px">'
                 f'<div style="display:flex;justify-content:space-between;align-items:baseline">'
                 f'<div style="font-size:0.95rem;font-weight:700;color:{NAVY}">{icon} {short_title}</div>'
                 f'<span class="pool-pill" style="background:{bg};color:{fg};font-size:0.68rem">{status_label}</span>'
@@ -742,6 +745,8 @@ with tab_session:
                 + (f'<div style="font-size:1.15rem;font-weight:700;color:{accent};margin-top:6px">{headline}</div>'
                    if headline else '')
                 + f'<div style="font-size:0.85rem;color:{SLATE if status == "none" else "#3d5666"};margin-top:8px">{lead}</div>'
+                + (f'<div style="font-size:0.85rem;color:{NAVY};margin-top:10px;padding-top:10px;'
+                   f'border-top:1px dashed {PALE}"><b>What to do:</b> {action}</div>' if action else '')
                 + '</div>',
                 unsafe_allow_html=True,
             )
@@ -749,44 +754,77 @@ with tab_session:
                 with st.expander(f"More on {short_title.lower()}"):
                     st.markdown(rest)
 
+    def _transition_headline(sig):
+        return "Video → Game switch" if "ACTIVE" in sig["transition"] else "Calm start → Video switch"
+
     RECOMMENDATIONS = [
         (1, "⏱️", "Session length", lambda: pl.signal_decline_point(dfs), pl.recommend_session_length,
          lambda sig: {"declined": "try", "stable": "good"}.get(sig.get("status"), "none"),
-         lambda sig: f'{sig["decline_elapsed_sec"] / 60:.0f} min before the dip' if sig.get("status") == "declined" else None),
+         lambda sig: (f'{sig["decline_elapsed_sec"] / 60:.0f} min before the dip' if sig.get("status") == "declined"
+                       else ("Steady all session" if sig.get("status") == "stable" else None)),
+         lambda sig: (
+             f'Offer a short 1-2 minute break after about {max(5, round(sig["decline_elapsed_sec"] / 60))} minutes of focused activity.'
+             if sig.get("status") == "declined" else
+             "No changes needed -- the current length suits them well." if sig.get("status") == "stable" else
+             "Let them play a bit longer next time so we can see their natural break point."
+             if sig.get("status") in ("no_task_data", "insufficient_trials") else None
+         )),
         (2, "🧩", "Difficulty", lambda: pl.signal_difficulty_sensitivity(dfs), pl.recommend_difficulty,
          lambda sig: "none" if sig is None else ("good" if sig["gap"] < 0.1 else "try"),
-         lambda sig: None if sig is None else f'{sig["acc_low_difficulty"]:.0%} easy vs {sig["acc_high_difficulty"]:.0%} tricky'),
+         lambda sig: None if sig is None else f'{sig["acc_low_difficulty"]:.0%} easy vs {sig["acc_high_difficulty"]:.0%} tricky',
+         lambda sig: (None if sig is None else
+                      ("Nothing to change -- keep playing both versions as you are." if sig["gap"] < 0.1 else
+                       "Play mostly the easy version for now, then mix in a few tricky rounds at a time."))),
         (3, "👂", "Modality", lambda: pl.signal_modality(metrics, dfs), pl.recommend_modality,
          lambda sig: "none" if sig is None else "info",
-         lambda sig: (f'{sig["visual_latency_ms"]:.0f} ms visual latency' if sig and sig.get("visual_latency_ms") is not None
-                       else (f'{sig["auditory_gaze_change_frac"]:.0%} auditory gaze shift' if sig and sig.get("auditory_gaze_change_frac") is not None else None))),
+         lambda sig: (f'Reacts to sights in ~{sig["visual_latency_ms"] / 1000:.1f}s' if sig and sig.get("visual_latency_ms") is not None
+                       else (f'{sig["auditory_gaze_change_frac"]:.0%} eye-movement change after sounds' if sig and sig.get("auditory_gaze_change_frac") is not None else None)),
+         lambda sig: (None if not sig or (sig.get("visual_latency_ms") is None and sig.get("auditory_gaze_change_frac") is None) else
+                      "Either talking to them or showing them something should work about equally well for getting their attention.")),
         (4, "🔄", "Transitions", lambda: pl.signal_transition_reactivity(dfs), pl.recommend_transitions,
          lambda sig: "none" if sig is None else "info",
-         lambda sig: None if sig is None else f'{sig["rmssd_reactivity_ms"]:+.0f} ms RMSSD reactivity'),
+         lambda sig: None if sig is None else _transition_headline(sig),
+         lambda sig: (None if sig is None else
+                      "Give a heads-up before switching activities, like a short countdown, instead of switching all at once.")),
         (5, "🎯", "Distraction", lambda: pl.signal_distraction(dfs), pl.recommend_distraction,
          lambda sig: "none" if sig is None else "try",
-         lambda sig: None if sig is None else f'{sig["fraction_of_zone_time"]:.0%} of focus time pulled away'),
+         lambda sig: None if sig is None else f'{sig["fraction_of_zone_time"]:.0%} of focus time pulled away',
+         lambda sig: ("Keep phones, screens, and windows out of their direct line of sight during focus time." if sig is None else
+                      "Try removing or covering whatever's in that spot during homework or focus time.")),
         (6, "👀", "Focus by phase", lambda: pl.signal_focus_by_phase(dfs), pl.recommend_focus_by_phase,
          lambda sig: "none" if sig is None else ("good" if sig["spread"] < 0.1 else "try"),
-         lambda sig: None if sig is None else f'{sig["best"]["on_task_ratio"]:.0%} vs {sig["worst"]["on_task_ratio"]:.0%} on-task'),
+         lambda sig: None if sig is None else f'{sig["best"]["on_task_ratio"]:.0%} vs {sig["worst"]["on_task_ratio"]:.0%} on-task',
+         lambda sig: (None if sig is None else
+                      ("You can lead with whichever activity matters most that day." if sig["spread"] < 0.1 else
+                       f'Try leading with something like {pl._phase_label(sig["best"]["phase"])} to ease them in.'))),
         (7, "🔁", "Recovery", lambda: pl.signal_post_response_recovery(dfs), pl.recommend_recovery,
          lambda sig: "none" if sig is None else ("good" if sig["instant"] or sig["notable_frac"] < 0.2 else "try"),
-         lambda sig: None if sig is None else ("instant" if sig["instant"] else f'{sig["notable_frac"]:.0%} of rounds slower to refocus')),
+         lambda sig: None if sig is None else ("instant" if sig["instant"] else f'{sig["notable_frac"]:.0%} of rounds slower to refocus'),
+         lambda sig: (None if sig is None else
+                      ("No changes needed -- they're staying engaged between turns." if sig["instant"] else
+                       "A short verbal cue right after they respond can help them refocus a little faster." if sig["notable_frac"] < 0.2 else
+                       "Try keeping rounds short and spaced out, with a brief pause between them."))),
         (8, "❤️", "Heart-rate response", lambda: pl.signal_heart_rate_response(dfs), pl.recommend_heart_rate_response,
          lambda sig: "none" if sig is None else "info",
-         lambda sig: None if sig is None else f'{sig["resting_bpm"]:.0f} → {sig["active_bpm"]:.0f} bpm'),
+         lambda sig: None if sig is None else f'{sig["resting_bpm"]:.0f} → {sig["active_bpm"]:.0f} bpm',
+         lambda sig: (None if sig is None else
+                      ("No action needed -- this is their normal, relaxed baseline." if sig["delta_frac"] is None or abs(sig["delta_frac"]) < 0.05 else
+                       "Nothing to do here -- this is a normal, healthy response to an engaging activity."))),
         (9, "📊", "Pacing", lambda: pl.signal_pacing_steadiness(dfs), pl.recommend_pacing_steadiness,
          lambda sig: "none" if sig is None else ("good" if sig["cv"] is None or sig["cv"] < 0.35 else "try"),
-         lambda sig: None if sig is None else f'CV {sig["cv"]:.2f}' if sig["cv"] is not None else f'{sig["mean_rt_ms"] / 1000:.2f}s avg pace'),
+         lambda sig: None if sig is None else f'{sig["mean_rt_ms"] / 1000:.2f}s per round on average',
+         lambda sig: (None if sig is None else
+                      ("No changes needed -- this pace and format suit them well." if sig["cv"] is None or sig["cv"] < 0.35 else
+                       "Try keeping rounds short and spaced out rather than one long stretch."))),
     ]
 
     st.markdown("#### Personalized recommendations")
     st.caption("Color = at a glance: green means on track, amber means worth a try, blue is context "
-               "rather than a concern. The headline number comes straight from this session's data; "
-               "tap a card to open the full explanation and, where there is one, the things-to-try list.")
+               "rather than a concern. \"What to do\" is the actual suggestion; tap a card for the full "
+               "explanation.")
     rec_cols = st.columns(2)
-    for i, (n, icon, short_title, signal_fn, recommend_fn, status_fn, headline_fn) in enumerate(RECOMMENDATIONS):
-        render_recommendation_card(rec_cols[i % 2], n, icon, short_title, signal_fn, recommend_fn, status_fn, headline_fn)
+    for i, (n, icon, short_title, signal_fn, recommend_fn, status_fn, headline_fn, action_fn) in enumerate(RECOMMENDATIONS):
+        render_recommendation_card(rec_cols[i % 2], n, icon, short_title, signal_fn, recommend_fn, status_fn, headline_fn, action_fn)
 
     st.markdown(
         f'<div class="caution-box">Confidence: LOW -- based on a single session, from a pool of '
