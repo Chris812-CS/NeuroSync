@@ -764,8 +764,8 @@ with tab_cluster_diag:
     st.markdown("### Clustering feature diagnostics")
     st.caption("The live model's 6 features (see Overview) were originally chosen by their Control-vs-ADHD "
                "z-gap alone. This tab recomputes that z-gap for every candidate metric across **all three** "
-               "pairwise group contrasts, and lets you try an alternate feature set against this pool side "
-               "by side with the live model -- without changing anything in Overview. "
+               "pairwise group contrasts, and checks a fixed alternate feature set against this pool side by "
+               "side with the live model -- without changing anything in Overview. "
                "Requires **Reveal filename-derived groups** in the sidebar.")
 
     if not reveal:
@@ -798,17 +798,18 @@ with tab_cluster_diag:
                        f"picked by the `control_vs_adhd` column alone -- compare it against `control_vs_autistic` "
                        f"and `adhd_vs_autistic` to see where that may be under- or over-weighting a contrast.")
 
-            st.markdown("#### Try a candidate feature set")
-            max_n = min(10, len(zgap_df))
-            n_features = st.slider("Number of features to select by max z-gap", 2, max_n, min(6, max_n))
-            default_features = zgap_df["metric"].head(n_features).tolist()
-            chosen = st.multiselect(
-                "Features (defaults to the top-N by max z-gap above; edit freely)",
-                zgap_df["metric"].tolist(), default=default_features,
-            )
+            st.markdown("#### Candidate feature set")
+            FIXED_CANDIDATE_KEYS = ["BCEA_resting", "accuracy", "BCEA_overall", "adhd_flag_ratio", "autism_flag_ratio"]
+            chosen = [k for k in FIXED_CANDIDATE_KEYS if k in zgap_df["metric"].values]
+            st.caption("Fixed to the 5 metrics behind the **Key differences across groups** box on the Group "
+                       "comparison tab -- the metrics with the largest *relative* (%) gap between groups, as "
+                       "opposed to the largest *z-gap* (mean/std) ranking in the table above. The two rankings "
+                       "can disagree when a metric's within-group spread is also large; this candidate tests "
+                       "the relative-gap view against the live model, which was picked by z-gap alone. "
+                       f"Features: {', '.join(chosen)}.")
 
             if len(chosen) < 2:
-                st.warning("Pick at least 2 features to fit a candidate model.")
+                st.warning("Not enough of the fixed candidate metrics are available in this pool to fit a model.")
             else:
                 X_candidate, _ = pl.build_feature_matrix(session_long, metric_keys=chosen)
                 gmm_c, cluster_probs_c, prob_cols_c, n_clusters_c, bic_scores_c = pl.run_clustering(
@@ -856,7 +857,7 @@ with tab_cluster_diag:
                         unsafe_allow_html=True,
                     )
                 with col_candidate:
-                    st.markdown("**Candidate feature set**")
+                    st.markdown("**Candidate** (relative-gap metrics)")
                     accent = (GREEN[0] if n_correct_c > n_correct_live
                               else AMBER[0] if n_correct_c == n_correct_live else RED[0])
                     st.markdown(
