@@ -302,6 +302,44 @@ def interpret_group_shift(df, metric_a, metric_b, label_a, label_b, unit="", dec
     return "; ".join(lines) + "."
 
 
+def rank_group_insights(df, specs, top_n=5):
+    """Rank single-value metrics by the size of the biggest non-Control
+    group's deviation from Control, and return the top N as HTML bullet
+    strings -- a data-driven "what stands out" summary instead of a fixed
+    editorial claim, so it stays honest as the pool grows or changes.
+    specs: list of (metric, label, unit, pct, decimals)."""
+    scored = []
+    for metric, label, unit, pct, decimals in specs:
+        means = {}
+        for g in GROUP_ORDER:
+            vals = df.loc[df["group"] == g, metric].dropna()
+            if len(vals):
+                means[g] = vals.mean() * (100 if pct else 1)
+        if "control" not in means or len(means) < 2 or means["control"] == 0:
+            continue
+        base = means["control"]
+        for g in ("adhd", "autistic", "autistic_adhd"):
+            if g not in means:
+                continue
+            diff_pct = (means[g] - base) / abs(base) * 100
+            scored.append((abs(diff_pct), diff_pct, metric, label, unit, decimals, g, means[g], base))
+
+    scored.sort(key=lambda row: row[0], reverse=True)
+    bullets, seen_metrics = [], set()
+    for abs_diff, diff_pct, metric, label, unit, decimals, g, val, base in scored:
+        if metric in seen_metrics or abs_diff < 1:
+            continue
+        seen_metrics.add(metric)
+        direction = "higher" if diff_pct > 0 else "lower"
+        bullets.append(
+            f"<b>{label}:</b> {GROUP_DISPLAY_NAMES[g]} averages {val:.{decimals}f}{unit}, "
+            f"{abs(diff_pct):.0f}% {direction} than Control ({base:.{decimals}f}{unit})."
+        )
+        if len(bullets) >= top_n:
+            break
+    return bullets
+
+
 if not data_dir_str:
     st.title("CSI/CVI Unknown-Group Dashboard")
     st.info("Enter a data folder path in the sidebar to get started.")
@@ -490,6 +528,31 @@ with tab_compare:
                "or two outliers. Requires **Reveal filename-derived groups** in the sidebar.")
 
     if reveal:
+        session_long_grouped = session_long.copy()
+        session_long_grouped["group"] = session_long_grouped["participant"].map(group_for_crosscheck)
+
+        insight_specs = [
+            ("HR_overall", "Heart rate", " bpm", False, 1),
+            ("BCEA_resting", "Gaze instability (BCEA, resting)", "", False, 2),
+            ("accuracy", "Task accuracy", "%", True, 0),
+            ("reaction_time", "Reaction time", " ms", False, 0),
+            ("adhd_flag_ratio", "ADHD hidden-flag ratio", "%", True, 0),
+            ("autism_flag_ratio", "Autism hidden-flag ratio", "%", True, 0),
+        ]
+        insights = rank_group_insights(session_long_grouped, insight_specs)
+        if insights:
+            st.markdown(
+                f'<div class="metric-card" style="border-left-color:{BLUE[0]}">'
+                f'<div style="font-weight:700;color:{NAVY};margin-bottom:8px;font-size:1.02rem">'
+                f'🔍 Key differences across groups</div>'
+                f'<ul style="margin:0;padding-left:20px;color:#3d5666;font-size:0.9rem;line-height:1.75">'
+                + "".join(f"<li>{b}</li>" for b in insights) +
+                f'</ul><div style="font-size:0.75rem;color:{SLATE};margin-top:10px;padding-top:8px;'
+                f'border-top:1px dashed {PALE}">Ranked by size of deviation from Control in this pool -- '
+                f"descriptive for this pilot's sessions, not a statistically validated claim.</div></div>",
+                unsafe_allow_html=True,
+            )
+
         st.markdown("#### Hidden flag-ratios vs. revealed group")
         flag_ratio_by_group = session_long[["participant", "adhd_flag_ratio", "autism_flag_ratio"]].copy()
         flag_ratio_by_group["group"] = flag_ratio_by_group["participant"].map(group_for_crosscheck)
@@ -512,8 +575,6 @@ with tab_compare:
         st.caption("Mean +/- SD per group, with each session plotted as a dot. With only a handful of sessions "
                    "per group, treat these as descriptive comparisons for this pilot pool, not statistically "
                    "validated group differences.")
-        session_long_grouped = session_long.copy()
-        session_long_grouped["group"] = session_long_grouped["participant"].map(group_for_crosscheck)
 
         gc1, gc2 = st.columns(2)
         with gc1:
