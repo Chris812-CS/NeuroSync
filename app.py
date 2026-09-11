@@ -402,7 +402,9 @@ st.title("CSI/CVI Unknown-Group Dashboard")
 st.caption(f"{len(session_results)} session(s) loaded · window={window_sec:.0f}s · "
            f"clusters found: {n_clusters}")
 
-tab_overview, tab_compare, tab_session = st.tabs(["📊 Overview", "📈 Group comparison", "🧾 Session detail"])
+tab_overview, tab_compare, tab_cluster_diag, tab_session = st.tabs(
+    ["📊 Overview", "📈 Group comparison", "🧪 Clustering diagnostics", "🧾 Session detail"]
+)
 
 
 # ------------------------------------------------------------------
@@ -753,6 +755,133 @@ with tab_compare:
     else:
         st.info("Flip **Reveal filename-derived groups** in the sidebar to see the group-by-group metric "
                 "comparisons and the CSI phase-shift chart.")
+
+
+# ------------------------------------------------------------------
+# CLUSTERING DIAGNOSTICS TAB
+# ------------------------------------------------------------------
+with tab_cluster_diag:
+    st.markdown("### Clustering feature diagnostics")
+    st.caption("The live model's 6 features (see Overview) were originally chosen by their Control-vs-ADHD "
+               "z-gap alone. This tab recomputes that z-gap for every candidate metric across **all three** "
+               "pairwise group contrasts, and lets you try an alternate feature set against this pool side "
+               "by side with the live model -- without changing anything in Overview. "
+               "Requires **Reveal filename-derived groups** in the sidebar.")
+
+    if not reveal:
+        st.info("Flip **Reveal filename-derived groups** in the sidebar to compute z-gaps and try candidate "
+                "feature sets.")
+    else:
+        session_long_diag = session_long.copy()
+        session_long_diag["group"] = session_long_diag["participant"].map(group_for_crosscheck)
+
+        candidate_keys = pl.METRIC_KEYS + ["adhd_flag_ratio", "autism_flag_ratio"]
+        zgap_df = pl.compute_pairwise_zgaps(session_long_diag, candidate_keys, group_order=GROUP_ORDER)
+
+        if zgap_df.empty:
+            st.warning("Not enough data to compute z-gaps for this pool.")
+        else:
+            zgap_display = zgap_df.copy()
+            zgap_display.insert(
+                1, "in live model",
+                zgap_display["metric"].isin(pl.CLUSTER_METRIC_KEYS).map({True: "check", False: ""}),
+            )
+            gap_cols = [c for c in zgap_display.columns if c not in ("metric", "in live model")]
+            st.dataframe(
+                zgap_display.style.format({c: "{:.2f}" for c in gap_cols})
+                .background_gradient(subset=gap_cols, cmap="Oranges"),
+                use_container_width=True,
+            )
+            top = zgap_df.iloc[0]
+            st.caption(f"**What this shows:** `{top['metric']}` has the largest single-pair separation in this "
+                       f"pool (max z-gap {top['max_gap']:.2f}). The live model's 6 features (marked above) were "
+                       f"picked by the `control_vs_adhd` column alone -- compare it against `control_vs_autistic` "
+                       f"and `adhd_vs_autistic` to see where that may be under- or over-weighting a contrast.")
+
+            st.markdown("#### Try a candidate feature set")
+            max_n = min(10, len(zgap_df))
+            n_features = st.slider("Number of features to select by max z-gap", 2, max_n, min(6, max_n))
+            default_features = zgap_df["metric"].head(n_features).tolist()
+            chosen = st.multiselect(
+                "Features (defaults to the top-N by max z-gap above; edit freely)",
+                zgap_df["metric"].tolist(), default=default_features,
+            )
+
+            if len(chosen) < 2:
+                st.warning("Pick at least 2 features to fit a candidate model.")
+            else:
+                X_candidate, _ = pl.build_feature_matrix(session_long, metric_keys=chosen)
+                gmm_c, cluster_probs_c, prob_cols_c, n_clusters_c, bic_scores_c = pl.run_clustering(
+                    X_candidate, max_clusters
+                )
+                _, _, crosscheck_c, cluster_group_lean_c = pl.reveal_groups(session_results, cluster_probs_c)
+                predicted_c = cluster_probs_c["assigned_cluster"].map(cluster_group_lean_c)
+                actual_all = pd.Series({sid: res["group"] for sid, res in session_results.items()})
+                match_c = pd.Series(
+                    [pl.match_result(actual_all[sid], predicted_c[sid]) for sid in cluster_probs_c.index],
+                    index=cluster_probs_c.index,
+                )
+                n_correct_c, n_total_c = int((match_c == True).sum()), len(match_c)
+                sizes_c = cluster_probs_c["assigned_cluster"].value_counts().sort_index()
+
+                predicted_live = cluster_probs["assigned_cluster"].map(cluster_group_lean)
+                match_live = pd.Series(
+                    [pl.match_result(actual_all[sid], predicted_live[sid]) for sid in cluster_probs.index],
+                    index=cluster_probs.index,
+                )
+                n_correct_live, n_total_live = int((match_live == True).sum()), len(match_live)
+                sizes_live = cluster_probs["assigned_cluster"].value_counts().sort_index()
+
+                def _model_card(accent, features, k, n_correct, n_total, sizes):
+                    return (
+                        f'<div class="metric-card" style="border-left-color:{accent}">'
+                        f'<div style="font-size:0.72rem;color:{SLATE}">{", ".join(features)}</div>'
+                        f'<div style="display:flex;gap:24px;margin-top:8px">'
+                        f'<div><div style="font-size:0.8rem;color:{SLATE}">k (clusters)</div>'
+                        f'<div style="font-size:1.4rem;font-weight:700;color:{NAVY}">{k}</div></div>'
+                        f'<div><div style="font-size:0.8rem;color:{SLATE}">Exact match</div>'
+                        f'<div style="font-size:1.4rem;font-weight:700;color:{NAVY}">{n_correct}/{n_total}</div></div>'
+                        f'</div>'
+                        f'<div style="font-size:0.8rem;color:{SLATE};margin-top:8px">Cluster sizes</div>'
+                        f'<div style="font-size:0.95rem;color:{NAVY}">{", ".join(str(v) for v in sizes.values)}'
+                        f'{" -- has a 1-member cluster" if sizes.min() <= 1 else ""}</div>'
+                        f'</div>'
+                    )
+
+                col_live, col_candidate = st.columns(2)
+                with col_live:
+                    st.markdown("**Live model** (Overview)")
+                    st.markdown(
+                        _model_card(SLATE, pl.CLUSTER_METRIC_KEYS, n_clusters, n_correct_live, n_total_live, sizes_live),
+                        unsafe_allow_html=True,
+                    )
+                with col_candidate:
+                    st.markdown("**Candidate feature set**")
+                    accent = (GREEN[0] if n_correct_c > n_correct_live
+                              else AMBER[0] if n_correct_c == n_correct_live else RED[0])
+                    st.markdown(
+                        _model_card(accent, chosen, n_clusters_c, n_correct_c, n_total_c, sizes_c),
+                        unsafe_allow_html=True,
+                    )
+
+                if sizes_c.min() <= 1 or sizes_live.min() <= 1:
+                    st.markdown(
+                        '<div class="caution-box">A cluster with only 1 member has an essentially unestimated '
+                        'covariance in a diagonal-covariance GMM -- its "exact match" is not meaningful '
+                        'validation. Watch the cluster-size lists above, not just the match count.</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                with st.expander("BIC by k (live vs. candidate)"):
+                    st.dataframe(
+                        pd.DataFrame({"live": pd.Series(bic_scores), "candidate": pd.Series(bic_scores_c)}),
+                        use_container_width=True,
+                    )
+                    st.caption("Lower BIC = better fit for that k, penalized for model complexity.")
+
+                st.caption("This comparison is scoped to this tab only -- it does not change Overview, Group "
+                           "comparison, or Session detail. Adopting a candidate set means updating "
+                           "`CLUSTER_METRIC_KEYS` in `csi_cvi_pipeline.py`.")
 
 
 # ------------------------------------------------------------------

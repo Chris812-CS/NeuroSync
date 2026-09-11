@@ -6,6 +6,7 @@ numbers produced by the dashboard match the notebook exactly. This module
 has no Streamlit dependency; it's pure data logic, imported by app.py.
 """
 import io
+import itertools
 import re
 from pathlib import Path
 
@@ -484,6 +485,47 @@ def build_feature_matrix(long_df, metric_keys=CLUSTER_METRIC_KEYS):
         index=X_raw.index, columns=metric_keys,
     )
     return X, n_missing
+
+
+def compute_pairwise_zgaps(long_df, metric_keys, group_col="group", group_order=None):
+    """Z-score each metric across the whole pool (population std, ddof=0
+    -- same convention as build_feature_matrix's StandardScaler), then
+    compute each group's mean z-score and the absolute gap between every
+    pair of groups present. This is the same "z-gap" heuristic used to
+    hand-pick CLUSTER_METRIC_KEYS (see its comment), generalized to every
+    candidate metric and every pairwise contrast -- not just Control vs.
+    ADHD -- so feature selection doesn't silently favor separating one
+    pair of groups at the expense of the others."""
+    df = long_df.copy()
+    present = set(df[group_col].dropna().unique())
+    groups_present = [g for g in (group_order or sorted(present)) if g in present]
+    pairs = list(itertools.combinations(groups_present, 2))
+
+    rows = []
+    for metric in metric_keys:
+        if metric not in df.columns:
+            continue
+        vals = pd.to_numeric(df[metric], errors="coerce")
+        std = vals.std(ddof=0)
+        if vals.notna().sum() < 2 or not std or pd.isna(std):
+            continue
+        z = (vals - vals.mean()) / std
+        group_means = {g: z[df[group_col] == g].mean() for g in groups_present}
+        row = {"metric": metric}
+        gaps = []
+        for a, b in pairs:
+            if pd.isna(group_means.get(a)) or pd.isna(group_means.get(b)):
+                continue
+            gap = abs(group_means[a] - group_means[b])
+            row[f"{a}_vs_{b}"] = round(float(gap), 3)
+            gaps.append(gap)
+        row["max_gap"] = round(float(max(gaps)), 3) if gaps else np.nan
+        rows.append(row)
+
+    result = pd.DataFrame(rows)
+    if result.empty:
+        return result
+    return result.sort_values("max_gap", ascending=False).reset_index(drop=True)
 
 
 def select_k_by_bic(X, k_range):
