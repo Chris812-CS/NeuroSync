@@ -698,27 +698,95 @@ with tab_session:
                 else:
                     st.markdown(f'<span class="flag-na">n/a</span> -- {row["hypothesis"]}', unsafe_allow_html=True)
 
-    def render_recommendation(n, signal_fn, recommend_fn):
-        """Compute + render one recommendation; a bad signal/metric for this
-        particular session shouldn't take down the rest of the report, and
-        Streamlit Cloud redacts real exception text from the UI, so surface
-        it here directly to make production issues diagnosable."""
+    STATUS_STYLE = {
+        "good": (GREEN[0], GREEN[1], GREEN[2], "On track"),
+        "try": (AMBER[0], AMBER[1], AMBER[2], "Worth a try"),
+        "info": (BLUE[0], BLUE[1], BLUE[2], "For context"),
+        "none": (SLATE, "#EEF2F3", SLATE, "Not enough data"),
+    }
+
+    def render_recommendation_card(col, n, icon, short_title, signal_fn, recommend_fn, status_fn, headline_fn):
+        """Card-style recommendation: icon + short title + color-coded status
+        pill + a headline stat pulled straight from the signal dict (not
+        text-parsed, so it can't drift from the underlying numbers), the
+        lead sentence always visible, and the rest -- including any "things
+        to try" checklist already in the text -- one click away so the card
+        reads at a glance instead of as a wall of text.
+
+        A bad signal/metric for this particular session shouldn't take down
+        the rest of the report, and Streamlit Cloud redacts real exception
+        text from the UI, so surface it here directly to make production
+        issues diagnosable."""
         try:
-            text = recommend_fn(signal_fn())
+            sig = signal_fn()
+            text = recommend_fn(sig)
+            status = status_fn(sig)
+            headline = headline_fn(sig)
         except Exception as e:
-            text = f"_Couldn't generate this recommendation ({type(e).__name__}: {e})._"
-        st.markdown(f"{n}. " + text)
+            sig, status, headline = None, "none", None
+            text = f"Couldn't generate this recommendation ({type(e).__name__}: {e})."
+
+        accent, bg, fg, status_label = STATUS_STYLE[status]
+        _, body = text.split(": ", 1) if ": " in text else ("", text)
+        lead, _, rest = body.partition(". ")
+        lead = lead.rstrip(".") + "."
+        rest = rest.strip()
+
+        with col:
+            st.markdown(
+                f'<div class="metric-card" style="border-left-color:{accent};margin-bottom:14px;min-height:150px">'
+                f'<div style="display:flex;justify-content:space-between;align-items:baseline">'
+                f'<div style="font-size:0.95rem;font-weight:700;color:{NAVY}">{icon} {short_title}</div>'
+                f'<span class="pool-pill" style="background:{bg};color:{fg};font-size:0.68rem">{status_label}</span>'
+                f'</div>'
+                + (f'<div style="font-size:1.15rem;font-weight:700;color:{accent};margin-top:6px">{headline}</div>'
+                   if headline else '')
+                + f'<div style="font-size:0.85rem;color:{SLATE if status == "none" else "#3d5666"};margin-top:8px">{lead}</div>'
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+            if rest:
+                with st.expander(f"More on {short_title.lower()}"):
+                    st.markdown(rest)
+
+    RECOMMENDATIONS = [
+        (1, "⏱️", "Session length", lambda: pl.signal_decline_point(dfs), pl.recommend_session_length,
+         lambda sig: {"declined": "try", "stable": "good"}.get(sig.get("status"), "none"),
+         lambda sig: f'{sig["decline_elapsed_sec"] / 60:.0f} min before the dip' if sig.get("status") == "declined" else None),
+        (2, "🧩", "Difficulty", lambda: pl.signal_difficulty_sensitivity(dfs), pl.recommend_difficulty,
+         lambda sig: "none" if sig is None else ("good" if sig["gap"] < 0.1 else "try"),
+         lambda sig: None if sig is None else f'{sig["acc_low_difficulty"]:.0%} easy vs {sig["acc_high_difficulty"]:.0%} tricky'),
+        (3, "👂", "Modality", lambda: pl.signal_modality(metrics, dfs), pl.recommend_modality,
+         lambda sig: "none" if sig is None else "info",
+         lambda sig: (f'{sig["visual_latency_ms"]:.0f} ms visual latency' if sig and sig.get("visual_latency_ms") is not None
+                       else (f'{sig["auditory_gaze_change_frac"]:.0%} auditory gaze shift' if sig and sig.get("auditory_gaze_change_frac") is not None else None))),
+        (4, "🔄", "Transitions", lambda: pl.signal_transition_reactivity(dfs), pl.recommend_transitions,
+         lambda sig: "none" if sig is None else "info",
+         lambda sig: None if sig is None else f'{sig["rmssd_reactivity_ms"]:+.0f} ms RMSSD reactivity'),
+        (5, "🎯", "Distraction", lambda: pl.signal_distraction(dfs), pl.recommend_distraction,
+         lambda sig: "none" if sig is None else "try",
+         lambda sig: None if sig is None else f'{sig["fraction_of_zone_time"]:.0%} of focus time pulled away'),
+        (6, "👀", "Focus by phase", lambda: pl.signal_focus_by_phase(dfs), pl.recommend_focus_by_phase,
+         lambda sig: "none" if sig is None else ("good" if sig["spread"] < 0.1 else "try"),
+         lambda sig: None if sig is None else f'{sig["best"]["on_task_ratio"]:.0%} vs {sig["worst"]["on_task_ratio"]:.0%} on-task'),
+        (7, "🔁", "Recovery", lambda: pl.signal_post_response_recovery(dfs), pl.recommend_recovery,
+         lambda sig: "none" if sig is None else ("good" if sig["instant"] or sig["notable_frac"] < 0.2 else "try"),
+         lambda sig: None if sig is None else ("instant" if sig["instant"] else f'{sig["notable_frac"]:.0%} of rounds slower to refocus')),
+        (8, "❤️", "Heart-rate response", lambda: pl.signal_heart_rate_response(dfs), pl.recommend_heart_rate_response,
+         lambda sig: "none" if sig is None else "info",
+         lambda sig: None if sig is None else f'{sig["resting_bpm"]:.0f} → {sig["active_bpm"]:.0f} bpm'),
+        (9, "📊", "Pacing", lambda: pl.signal_pacing_steadiness(dfs), pl.recommend_pacing_steadiness,
+         lambda sig: "none" if sig is None else ("good" if sig["cv"] is None or sig["cv"] < 0.35 else "try"),
+         lambda sig: None if sig is None else f'CV {sig["cv"]:.2f}' if sig["cv"] is not None else f'{sig["mean_rt_ms"] / 1000:.2f}s avg pace'),
+    ]
 
     st.markdown("#### Personalized recommendations")
-    render_recommendation(1, lambda: pl.signal_decline_point(dfs), pl.recommend_session_length)
-    render_recommendation(2, lambda: pl.signal_difficulty_sensitivity(dfs), pl.recommend_difficulty)
-    render_recommendation(3, lambda: pl.signal_modality(metrics, dfs), pl.recommend_modality)
-    render_recommendation(4, lambda: pl.signal_transition_reactivity(dfs), pl.recommend_transitions)
-    render_recommendation(5, lambda: pl.signal_distraction(dfs), pl.recommend_distraction)
-    render_recommendation(6, lambda: pl.signal_focus_by_phase(dfs), pl.recommend_focus_by_phase)
-    render_recommendation(7, lambda: pl.signal_post_response_recovery(dfs), pl.recommend_recovery)
-    render_recommendation(8, lambda: pl.signal_heart_rate_response(dfs), pl.recommend_heart_rate_response)
-    render_recommendation(9, lambda: pl.signal_pacing_steadiness(dfs), pl.recommend_pacing_steadiness)
+    st.caption("Color = at a glance: green means on track, amber means worth a try, blue is context "
+               "rather than a concern. The headline number comes straight from this session's data; "
+               "tap a card to open the full explanation and, where there is one, the things-to-try list.")
+    rec_cols = st.columns(2)
+    for i, (n, icon, short_title, signal_fn, recommend_fn, status_fn, headline_fn) in enumerate(RECOMMENDATIONS):
+        render_recommendation_card(rec_cols[i % 2], n, icon, short_title, signal_fn, recommend_fn, status_fn, headline_fn)
 
     st.markdown(
         f'<div class="caution-box">Confidence: LOW -- based on a single session, from a pool of '
