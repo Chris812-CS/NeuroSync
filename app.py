@@ -731,7 +731,7 @@ with tab_session:
         plt.tight_layout()
         return fig
 
-    def _donut(frac, color_main, center_label, figsize=(1.9, 1.9)):
+    def _donut(frac, color_main, center_label, figsize=(1.9, 1.9), caption=None):
         fig, ax = plt.subplots(figsize=figsize)
         fig.patch.set_facecolor(CREAM)
         frac = max(0.0, min(1.0, frac))
@@ -739,6 +739,8 @@ with tab_session:
                wedgeprops=dict(width=0.38, edgecolor=CREAM, linewidth=2))
         ax.text(0, 0, center_label, ha="center", va="center", fontsize=12.5, fontweight="bold", color=NAVY)
         ax.set_aspect("equal")
+        if caption:
+            ax.set_title(caption, fontsize=8, color=SLATE, pad=6)
         return fig
 
     def chart_session_length(sig):
@@ -800,7 +802,9 @@ with tab_session:
             return None
         if sig["instant"]:
             return _donut(0.02, GREEN[0], "instant")
-        return _donut(sig["notable_frac"], AMBER[0], f'{sig["notable_frac"]:.0%}')
+        color = GREEN[0] if sig["notable_frac"] < 0.2 else AMBER[0]
+        return _donut(sig["notable_frac"], color, f'{sig["notable_frac"]:.0%}',
+                      caption="of rounds needed a moment to refocus")
 
     def chart_heart_rate(sig):
         if sig is None:
@@ -941,7 +945,8 @@ with tab_session:
          chart_focus_by_phase),
         (7, "🔁", "Recovery", lambda: pl.signal_post_response_recovery(dfs), pl.recommend_recovery,
          lambda sig: "none" if sig is None else ("good" if sig["instant"] or sig["notable_frac"] < 0.2 else "try"),
-         lambda sig: None if sig is None else ("instant" if sig["instant"] else f'{sig["notable_frac"]:.0%} of rounds slower to refocus'),
+         lambda sig: None if sig is None else ("Instant refocus, every round" if sig["instant"] else
+                      f'{sig["notable_frac"]:.0%} of rounds took ~{sig["notable_median_ms"] / 1000:.1f}s longer to refocus'),
          lambda sig: (None if sig is None else
                       ("No changes needed -- they're staying engaged between turns." if sig["instant"] else
                        "A short verbal cue right after they respond can help them refocus a little faster." if sig["notable_frac"] < 0.2 else
