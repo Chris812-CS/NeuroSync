@@ -256,28 +256,48 @@ def render_group_comparison_chart(df, metrics, metric_labels, colors, ylabel, ti
 
 
 def interpret_group_metric(df, metric, unit="", pct=False, decimals=1):
-    """One-sentence plain-language comparison of Control vs. ADHD/Autistic
-    means for a single metric, computed from the live data -- not static
-    text. Returns None if there's not enough data to compare."""
+    """One-sentence plain-language comparison of group means for a single
+    metric, computed from the live data -- not static text. States each
+    present group vs. Control (when Control data exists), then always adds
+    an explicit ADHD-vs-Autistic line, since that head-to-head is often the
+    more clinically relevant contrast and isn't implied by two separate
+    vs.-Control readings. Returns None if there's not enough data."""
     means = {}
     for g in GROUP_ORDER:
         vals = df.loc[df["group"] == g, metric].dropna()
         if len(vals):
             means[g] = vals.mean() * (100 if pct else 1)
-    if "control" not in means or len(means) < 2:
+    if len(means) < 2:
         return None
-    base = means["control"]
-    parts = [f"Control averages {base:.{decimals}f}{unit}"]
-    for g in ("adhd", "autistic"):
-        if g not in means or base == 0:
-            continue
-        diff_pct = (means[g] - base) / abs(base) * 100
+
+    parts = []
+    if "control" in means:
+        base = means["control"]
+        parts.append(f"Control averages {base:.{decimals}f}{unit}")
+        for g in ("adhd", "autistic"):
+            if g not in means or base == 0:
+                continue
+            diff_pct = (means[g] - base) / abs(base) * 100
+            if round(abs(diff_pct)) == 0:
+                comparison = "about the same as Control"
+            else:
+                direction = "higher" if means[g] > base else "lower"
+                comparison = f"{abs(diff_pct):.0f}% {direction} than Control"
+            parts.append(f"{GROUP_DISPLAY_NAMES[g]} averages {means[g]:.{decimals}f}{unit} ({comparison})")
+    else:
+        for g in ("adhd", "autistic"):
+            if g in means:
+                parts.append(f"{GROUP_DISPLAY_NAMES[g]} averages {means[g]:.{decimals}f}{unit}")
+
+    if "adhd" in means and "autistic" in means and means["autistic"] != 0:
+        diff_pct = (means["adhd"] - means["autistic"]) / abs(means["autistic"]) * 100
         if round(abs(diff_pct)) == 0:
-            comparison = "about the same as Control"
+            comparison = "about the same as Autistic"
         else:
-            direction = "higher" if means[g] > base else "lower"
-            comparison = f"{abs(diff_pct):.0f}% {direction} than Control"
-        parts.append(f"{GROUP_DISPLAY_NAMES[g]} averages {means[g]:.{decimals}f}{unit} ({comparison})")
+            direction = "higher" if means["adhd"] > means["autistic"] else "lower"
+            comparison = f"{abs(diff_pct):.0f}% {direction} than Autistic"
+        parts.append(f"ADHD is {comparison}")
+
     if len(parts) < 2:
         return None
     return "; ".join(parts) + "."
@@ -302,12 +322,18 @@ def interpret_group_shift(df, metric_a, metric_b, label_a, label_b, unit="", dec
     return "; ".join(lines) + "."
 
 
-def rank_group_insights(df, specs, top_n=5):
-    """Rank single-value metrics by the size of the biggest non-Control
-    group's deviation from Control, and return the top N as HTML bullet
-    strings -- a data-driven "what stands out" summary instead of a fixed
-    editorial claim, so it stays honest as the pool grows or changes.
+def rank_group_insights(df, specs, top_n=5, pairs=None):
+    """Rank single-value metrics by the size of the biggest relative
+    difference between any two groups present -- not just vs. Control --
+    and return the top N as HTML bullet strings. Each metric contributes
+    at most one bullet: whichever pair (e.g. vs. Control, or ADHD vs.
+    Autistic) shows the largest deviation for that metric. A data-driven
+    "what stands out" summary instead of a fixed editorial claim, so it
+    stays honest as the pool grows or changes.
     specs: list of (metric, label, unit, pct, decimals)."""
+    if pairs is None:
+        pairs = [("adhd", "control"), ("autistic", "control"), ("adhd", "autistic")]
+
     scored = []
     for metric, label, unit, pct, decimals in specs:
         means = {}
@@ -315,25 +341,23 @@ def rank_group_insights(df, specs, top_n=5):
             vals = df.loc[df["group"] == g, metric].dropna()
             if len(vals):
                 means[g] = vals.mean() * (100 if pct else 1)
-        if "control" not in means or len(means) < 2 or means["control"] == 0:
-            continue
-        base = means["control"]
-        for g in ("adhd", "autistic", "autistic_adhd"):
-            if g not in means:
+        for g, base_g in pairs:
+            if g not in means or base_g not in means or means[base_g] == 0:
                 continue
+            base = means[base_g]
             diff_pct = (means[g] - base) / abs(base) * 100
-            scored.append((abs(diff_pct), diff_pct, metric, label, unit, decimals, g, means[g], base))
+            scored.append((abs(diff_pct), diff_pct, metric, label, unit, decimals, g, means[g], base_g, base))
 
     scored.sort(key=lambda row: row[0], reverse=True)
     bullets, seen_metrics = [], set()
-    for abs_diff, diff_pct, metric, label, unit, decimals, g, val, base in scored:
+    for abs_diff, diff_pct, metric, label, unit, decimals, g, val, base_g, base in scored:
         if metric in seen_metrics or abs_diff < 1:
             continue
         seen_metrics.add(metric)
         direction = "higher" if diff_pct > 0 else "lower"
         bullets.append(
             f"<b>{label}:</b> {GROUP_DISPLAY_NAMES[g]} averages {val:.{decimals}f}{unit}, "
-            f"{abs(diff_pct):.0f}% {direction} than Control ({base:.{decimals}f}{unit})."
+            f"{abs(diff_pct):.0f}% {direction} than {GROUP_DISPLAY_NAMES[base_g]} ({base:.{decimals}f}{unit})."
         )
         if len(bullets) >= top_n:
             break
@@ -554,6 +578,13 @@ with tab_compare:
             )
 
         st.markdown("#### Hidden flag-ratios vs. revealed group")
+        st.caption("Each session runs a handful of literature-derived, within-session checks -- e.g. \"is CSI "
+                   "lower at rest than during the game?\" for ADHD, \"is CVI lower in the first 30s than the "
+                   "rest of the session?\" for autism -- computed **blind to the filename label**, from that "
+                   "session's own signal alone. `adhd_flag_ratio` / `autism_flag_ratio` is the share of those "
+                   "checks that came out YES for a session; the table below only lines them up against the "
+                   "revealed group afterward, as a sanity check on whether the labeled groups actually show "
+                   "the patterns the checks look for more often than Control.")
         flag_ratio_by_group = session_long[["participant", "adhd_flag_ratio", "autism_flag_ratio"]].copy()
         flag_ratio_by_group["group"] = flag_ratio_by_group["participant"].map(group_for_crosscheck)
         flag_summary = flag_ratio_by_group.groupby("group")[["adhd_flag_ratio", "autism_flag_ratio"]].mean().round(3)
