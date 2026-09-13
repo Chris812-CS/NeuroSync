@@ -927,45 +927,47 @@ with tab_session:
     m3.metric("HR overall (bpm)", f"{metrics.get('HR_overall', float('nan')):.1f}")
     m4.metric("Accuracy", f"{metrics.get('accuracy', float('nan')):.0%}" if pd.notna(metrics.get("accuracy")) else "n/a")
 
-    st.markdown("#### Cluster membership")
-    st.caption("Unsupervised -- fit blind to filename labels.")
-    if sess_id in cluster_probs.index:
-        probs_row = cluster_probs.loc[sess_id]
-        for col in prob_cols:
-            lean = f" (leans '{cluster_group_lean[col]}')" if reveal else ""
-            st.progress(float(probs_row[col]), text=f"{col}{lean} -- {probs_row[col]:.0%}  ·  {cluster_profiles[col]}")
-        assigned = probs_row["assigned_cluster"]
-        st.markdown(f"**Assigned cluster:** `{assigned}` -- {cluster_profiles[assigned]}"
-                    + (f"  →  predicted group **{cluster_group_lean[assigned]}**" if reveal else ""))
+    with st.expander("Cluster membership (unsupervised prediction)"):
+        st.caption("Unsupervised -- fit blind to filename labels.")
+        if sess_id in cluster_probs.index:
+            probs_row = cluster_probs.loc[sess_id]
+            for col in prob_cols:
+                lean = f" (leans '{cluster_group_lean[col]}')" if reveal else ""
+                st.progress(float(probs_row[col]), text=f"{col}{lean} -- {probs_row[col]:.0%}  ·  {cluster_profiles[col]}")
+            assigned = probs_row["assigned_cluster"]
+            st.markdown(f"**Assigned cluster:** `{assigned}` -- {cluster_profiles[assigned]}"
+                        + (f"  →  predicted group **{cluster_group_lean[assigned]}**" if reveal else ""))
 
-        explanation = pl.explain_cluster_assignment(gmm, X_ai, cluster_probs, sess_id)
-        if explanation is not None:
-            with st.expander(f"Why {explanation['assigned_col']} over {explanation['runner_up_col']}?"):
-                st.markdown("**In favor of the assigned cluster:**")
+            explanation = pl.explain_cluster_assignment(gmm, X_ai, cluster_probs, sess_id)
+            if explanation is not None:
+                # (nested expanders aren't allowed in Streamlit -- this is already
+                # inside the "Cluster membership" expander, so plain markdown here)
+                st.markdown(f"**Why {explanation['assigned_col']} over {explanation['runner_up_col']}?**")
+                st.markdown("In favor of the assigned cluster:")
                 st.dataframe(explanation["for_assigned"][["feature", "value_z", "dist_to_assigned", "dist_to_runner_up"]],
                              use_container_width=True, hide_index=True)
                 if len(explanation["against_assigned"]):
-                    st.markdown("**Pulled the other way (outweighed):**")
+                    st.markdown("Pulled the other way (outweighed):")
                     st.dataframe(explanation["against_assigned"][["feature", "value_z", "dist_to_assigned", "dist_to_runner_up"]],
                                  use_container_width=True, hide_index=True)
 
-    st.markdown("#### Hypothesis checks")
-    hc1, hc2 = st.columns(2)
-    for col, group_name in [(hc1, "adhd"), (hc2, "autism")]:
-        with col:
-            st.markdown(f"**{group_name.upper()} pattern checks**")
-            flags = pl.flag_hypothesis_directions(metrics, group_name, rel_tol)
-            for _, row in flags.iterrows():
-                if row["flag"] == "YES":
-                    st.markdown(f'<span class="flag-yes">✓ YES</span> -- {row["hypothesis"]}', unsafe_allow_html=True)
-                elif row["flag"] == "no":
-                    st.markdown(f'<span class="flag-no">✗ no</span> -- {row["hypothesis"]}', unsafe_allow_html=True)
-                elif str(row["flag"]).startswith("value="):
-                    st.markdown(f'<span class="flag-na">{row["flag"]}</span> -- {row["hypothesis"]} '
-                                f'<span style="color:{SLATE};font-size:0.85rem">(needs comparison session)</span>',
-                                unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<span class="flag-na">n/a</span> -- {row["hypothesis"]}', unsafe_allow_html=True)
+    with st.expander("Hypothesis checks (ADHD / Autism pattern flags)"):
+        hc1, hc2 = st.columns(2)
+        for col, group_name in [(hc1, "adhd"), (hc2, "autism")]:
+            with col:
+                st.markdown(f"**{group_name.upper()} pattern checks**")
+                flags = pl.flag_hypothesis_directions(metrics, group_name, rel_tol)
+                for _, row in flags.iterrows():
+                    if row["flag"] == "YES":
+                        st.markdown(f'<span class="flag-yes">✓ YES</span> -- {row["hypothesis"]}', unsafe_allow_html=True)
+                    elif row["flag"] == "no":
+                        st.markdown(f'<span class="flag-no">✗ no</span> -- {row["hypothesis"]}', unsafe_allow_html=True)
+                    elif str(row["flag"]).startswith("value="):
+                        st.markdown(f'<span class="flag-na">{row["flag"]}</span> -- {row["hypothesis"]} '
+                                    f'<span style="color:{SLATE};font-size:0.85rem">(needs comparison session)</span>',
+                                    unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<span class="flag-na">n/a</span> -- {row["hypothesis"]}', unsafe_allow_html=True)
 
     STATUS_STYLE = {
         "good": (GREEN[0], GREEN[1], GREEN[2], "On track"),
