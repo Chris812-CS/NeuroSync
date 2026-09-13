@@ -1135,7 +1135,8 @@ with tab_session:
 
         with col:
             st.markdown(
-                f'<div class="metric-card" style="border-left-color:{accent};margin-bottom:0;padding-bottom:10px">'
+                f'<div class="metric-card" style="border-left-color:{accent};margin-bottom:0;padding-bottom:10px;'
+                f'min-height:260px;display:flex;flex-direction:column">'
                 f'<div style="display:flex;align-items:center;gap:10px">'
                 f'{_icon_badge(icon, accent)}'
                 f'<div style="display:flex;flex-direction:column;gap:4px">'
@@ -1145,6 +1146,7 @@ with tab_session:
                 + (f'<div style="font-size:1.1rem;font-weight:700;color:{accent};margin-top:8px">{headline}</div>'
                    if headline else '')
                 + f'<div style="font-size:0.85rem;color:{SLATE if status == "none" else "#3d5666"};margin-top:8px">{lead}</div>'
+                + f'<div style="flex-grow:1"></div>'
                 + (f'<div style="font-size:0.85rem;color:{NAVY};margin-top:10px;padding-top:10px;'
                    f'border-top:1px dashed {PALE}"><b>What to do:</b> {action}</div>' if action else '')
                 + '</div>',
@@ -1162,6 +1164,8 @@ with tab_session:
             if rest:
                 with st.expander(f"More on {short_title.lower()}"):
                     st.markdown(rest)
+
+        return status, action
 
     def _transition_headline(sig):
         return "Video → Game switch" if "ACTIVE" in sig["transition"] else "Calm start → Video switch"
@@ -1242,14 +1246,41 @@ with tab_session:
                "rather than a concern. \"What to do\" is the actual suggestion; tap a card for the full "
                "explanation.")
     rec_cols = st.columns(2)
+    guide_results = []
     for i, (n, icon, short_title, signal_fn, recommend_fn, status_fn, headline_fn, action_fn, chart_fn) in enumerate(RECOMMENDATIONS):
-        render_recommendation_card(rec_cols[i % 2], n, icon, short_title, signal_fn, recommend_fn, status_fn, headline_fn, action_fn, chart_fn)
+        result = render_recommendation_card(rec_cols[i % 2], n, icon, short_title, signal_fn, recommend_fn, status_fn, headline_fn, action_fn, chart_fn)
+        guide_results.append(result)
 
     st.markdown(
         f'<div class="caution-box">Confidence: LOW -- based on a single session, from a pool of '
         f'{len(session_results)} session(s) total. Cluster membership and recommendations are descriptive, '
         f'pattern-based suggestions for this sitting only -- not a diagnosis, and not validated across '
         f'repeated sessions.</div>', unsafe_allow_html=True,
+    )
+
+    st.markdown("#### Quick guide: what to do")
+    st.caption("A condensed action checklist pulled straight from the cards above -- open a card there for "
+               "the full reasoning behind any item.")
+    guide_tiles = []
+    for (n, icon, short_title, *_rest), (status, action) in zip(RECOMMENDATIONS, guide_results):
+        if not action:
+            continue
+        accent, bg, fg, status_label = STATUS_STYLE[status]
+        guide_tiles.append(
+            f'<div style="background:white;border-radius:10px;padding:14px 16px;'
+            f'box-shadow:0 1px 3px rgba(11,61,92,0.08);border-top:4px solid {accent};'
+            f'display:flex;flex-direction:column;gap:8px">'
+            f'<div style="display:flex;align-items:center;gap:8px">'
+            f'{_icon_badge(icon, accent)}'
+            f'<div style="font-size:0.85rem;font-weight:700;color:{NAVY}">{n}. {short_title}</div>'
+            f'</div>'
+            f'<div style="font-size:0.82rem;color:#3d5666;line-height:1.4">{action}</div>'
+            f'</div>'
+        )
+    st.markdown(
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">'
+        + "".join(guide_tiles) + '</div>',
+        unsafe_allow_html=True,
     )
 
     with st.expander("Raw session tables (main_stream + logged sections)"):
