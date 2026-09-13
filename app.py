@@ -881,12 +881,72 @@ with tab_cluster_diag:
                         unsafe_allow_html=True,
                     )
 
+                st.markdown("#### Model fit at chosen k")
+                ll_live = gmm.score(X_ai.values) * len(X_ai)
+                ll_c = gmm_c.score(X_candidate.values) * len(X_candidate)
+                fit_table = pd.DataFrame(
+                    {"live": [ll_live, gmm.aic(X_ai.values), gmm.bic(X_ai.values)],
+                     "candidate": [ll_c, gmm_c.aic(X_candidate.values), gmm_c.bic(X_candidate.values)]},
+                    index=["Log-likelihood (total)", "AIC", "BIC"],
+                )
+                st.dataframe(fit_table.style.format("{:.1f}"), use_container_width=True)
+                st.caption("Higher log-likelihood and lower AIC/BIC = a tighter fit for that model's own "
+                           "feature space. **Caveat:** live and candidate are fit on different feature "
+                           "matrices, so this isn't the rigorous like-for-like comparison that BIC-across-k "
+                           "*within one* feature set is (below) -- read it as directional context, not a "
+                           "tie-breaker on its own.")
+
                 with st.expander("BIC by k (live vs. candidate)"):
                     st.dataframe(
                         pd.DataFrame({"live": pd.Series(bic_scores), "candidate": pd.Series(bic_scores_c)}),
                         use_container_width=True,
                     )
-                    st.caption("Lower BIC = better fit for that k, penalized for model complexity.")
+                    st.caption("Lower BIC = better fit for that k, penalized for model complexity. Only "
+                               "meaningful for comparing k *within* the same feature set (each column), not "
+                               "across the live/candidate columns.")
+
+                st.markdown("#### Candidate cluster pairplot")
+                st.caption("Each point is a session, colored by the candidate model's assigned cluster (n "
+                           "shown in the legend) -- check whether the smaller clusters sit in a visually "
+                           "distinct region for these features, or mostly overlap with the larger ones.")
+                cluster_palette = [GREEN[0], AMBER[0], RED[0], BLUE[0], TEAL, CORAL]
+                cluster_names_c = sorted(cluster_probs_c["assigned_cluster"].unique())
+                color_map = {name: cluster_palette[i % len(cluster_palette)] for i, name in enumerate(cluster_names_c)}
+
+                n_feat = len(chosen)
+                fig_pp, axes_pp = plt.subplots(n_feat, n_feat, figsize=(1.9 * n_feat, 1.9 * n_feat))
+                fig_pp.patch.set_facecolor(CREAM)
+                for i in range(n_feat):
+                    for j in range(n_feat):
+                        ax = axes_pp[i, j]
+                        ax.set_facecolor(CREAM)
+                        if j > i:
+                            ax.axis("off")
+                            continue
+                        fi, fj = chosen[i], chosen[j]
+                        for cname in cluster_names_c:
+                            ids = cluster_probs_c.index[cluster_probs_c["assigned_cluster"] == cname]
+                            if i == j:
+                                ax.hist(X_candidate.loc[ids, fi], bins=6, color=color_map[cname], alpha=0.6)
+                            else:
+                                ax.scatter(X_candidate.loc[ids, fj], X_candidate.loc[ids, fi],
+                                           color=color_map[cname], s=30, edgecolor=CREAM, linewidth=0.4, zorder=3)
+                        ax.set_xticks([])
+                        ax.set_yticks([])
+                        for spine in ax.spines.values():
+                            spine.set_color(PALE)
+                        if j == 0:
+                            ax.set_ylabel(fi, fontsize=7.5, color=NAVY)
+                        if i == n_feat - 1:
+                            ax.set_xlabel(fj, fontsize=7.5, color=NAVY)
+                legend_handles = [
+                    plt.Line2D([0], [0], marker="o", linestyle="", color=color_map[c],
+                               label=f"{c} (n={int((cluster_probs_c['assigned_cluster'] == c).sum())})")
+                    for c in cluster_names_c
+                ]
+                fig_pp.legend(handles=legend_handles, loc="upper right", fontsize=8, frameon=False)
+                plt.tight_layout()
+                st.pyplot(fig_pp, use_container_width=True)
 
                 st.caption("This comparison is scoped to this tab only -- it does not change Overview, Group "
                            "comparison, or Session detail. Adopting a candidate set means updating "
