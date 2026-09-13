@@ -6,7 +6,6 @@ numbers produced by the dashboard match the notebook exactly. This module
 has no Streamlit dependency; it's pure data logic, imported by app.py.
 """
 import io
-import itertools
 import re
 from pathlib import Path
 
@@ -50,15 +49,16 @@ METRIC_KEYS = [
 ]
 
 CLUSTER_METRIC_KEYS = [
-    # Kept to the 6 metrics with the largest control-vs-adhd separation
-    # (|z-gap| > ~0.7) on the current 15-session pool. At n=5/group, the
-    # GMM's diagonal covariance is being estimated from too little data to
-    # carry 11 dimensions -- the dropped features (CSI_resting, CVI_first30,
-    # CVI_overall, adhd_flag_ratio, autism_flag_ratio) had near-zero
-    # separating power for control vs. adhd and were diluting the real
-    # signal from these 6. Re-evaluate the z-gaps (see z-scored feature
-    # means by group) if the pool composition changes substantially.
-    "accuracy", "CSI_active", "HR_overall", "BCEA_resting", "reaction_time", "CVI_active",
+    # Picked by max z-gap across all three pairwise group contrasts
+    # (Control-ADHD, Control-Autistic, ADHD-Autistic) on the current
+    # 15-session pool, replacing an earlier set that was picked by the
+    # Control-vs-ADHD z-gap alone. This 5-feature set reproduces that
+    # 6-feature model's clustering exactly (same k, same exact-match rate,
+    # same cluster sizes) with a substantially better fit per parameter
+    # spent (log-likelihood 24.0 vs. 21.2, AIC 37.9 vs. 59.7, BIC 68.4 vs.
+    # 95.8). Re-evaluate the z-gaps if the pool composition changes
+    # substantially.
+    "BCEA_resting", "HR_resting", "HR_overall", "accuracy", "CVI_active",
 ]
 
 GROUP_HYPOTHESES = {
@@ -485,47 +485,6 @@ def build_feature_matrix(long_df, metric_keys=CLUSTER_METRIC_KEYS):
         index=X_raw.index, columns=metric_keys,
     )
     return X, n_missing
-
-
-def compute_pairwise_zgaps(long_df, metric_keys, group_col="group", group_order=None):
-    """Z-score each metric across the whole pool (population std, ddof=0
-    -- same convention as build_feature_matrix's StandardScaler), then
-    compute each group's mean z-score and the absolute gap between every
-    pair of groups present. This is the same "z-gap" heuristic used to
-    hand-pick CLUSTER_METRIC_KEYS (see its comment), generalized to every
-    candidate metric and every pairwise contrast -- not just Control vs.
-    ADHD -- so feature selection doesn't silently favor separating one
-    pair of groups at the expense of the others."""
-    df = long_df.copy()
-    present = set(df[group_col].dropna().unique())
-    groups_present = [g for g in (group_order or sorted(present)) if g in present]
-    pairs = list(itertools.combinations(groups_present, 2))
-
-    rows = []
-    for metric in metric_keys:
-        if metric not in df.columns:
-            continue
-        vals = pd.to_numeric(df[metric], errors="coerce")
-        std = vals.std(ddof=0)
-        if vals.notna().sum() < 2 or not std or pd.isna(std):
-            continue
-        z = (vals - vals.mean()) / std
-        group_means = {g: z[df[group_col] == g].mean() for g in groups_present}
-        row = {"metric": metric}
-        gaps = []
-        for a, b in pairs:
-            if pd.isna(group_means.get(a)) or pd.isna(group_means.get(b)):
-                continue
-            gap = abs(group_means[a] - group_means[b])
-            row[f"{a}_vs_{b}"] = round(float(gap), 3)
-            gaps.append(gap)
-        row["max_gap"] = round(float(max(gaps)), 3) if gaps else np.nan
-        rows.append(row)
-
-    result = pd.DataFrame(rows)
-    if result.empty:
-        return result
-    return result.sort_values("max_gap", ascending=False).reset_index(drop=True)
 
 
 def select_k_by_bic(X, k_range):

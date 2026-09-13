@@ -402,8 +402,8 @@ st.title("CSI/CVI Unknown-Group Dashboard")
 st.caption(f"{len(session_results)} session(s) loaded · window={window_sec:.0f}s · "
            f"clusters found: {n_clusters}")
 
-tab_overview, tab_compare, tab_cluster_diag, tab_session = st.tabs(
-    ["📊 Overview", "📈 Group comparison", "🧪 Clustering diagnostics", "🧾 Session detail"]
+tab_overview, tab_compare, tab_session = st.tabs(
+    ["📊 Overview", "📈 Group comparison", "🧾 Session detail"]
 )
 
 
@@ -476,6 +476,42 @@ with tab_overview:
                     unsafe_allow_html=True,
                 )
 
+    st.markdown("#### Feature heatmap (standardized)")
+    st.caption("Each row is a session, each column one of the clustering features (z-scored across the "
+               "pool). Rows are grouped by assigned cluster so within-cluster similarity and between-"
+               "cluster contrast are visible at a glance.")
+    heat_order = cluster_probs.sort_values("assigned_cluster").index
+    heat_df = X_ai.loc[heat_order]
+    fig_heat, ax_heat = plt.subplots(figsize=(6.5, 0.32 * len(heat_df) + 1.2))
+    fig_heat.patch.set_facecolor(CREAM)
+    im = ax_heat.imshow(heat_df.values, aspect="auto", cmap="RdBu_r", vmin=-2, vmax=2)
+    ax_heat.set_xticks(range(len(heat_df.columns)))
+    ax_heat.set_xticklabels(heat_df.columns, rotation=25, ha="right", fontsize=8, color=NAVY)
+    ax_heat.set_yticks(range(len(heat_df)))
+    ax_heat.set_yticklabels(
+        [f"{sid}  ({cluster_probs.loc[sid, 'assigned_cluster']})" for sid in heat_df.index],
+        fontsize=7, color=NAVY,
+    )
+    for spine in ax_heat.spines.values():
+        spine.set_visible(False)
+    cbar = fig_heat.colorbar(im, ax=ax_heat, shrink=0.7)
+    cbar.set_label("z-score", fontsize=8, color=NAVY)
+    cbar.ax.tick_params(labelsize=7)
+    plt.tight_layout()
+    st.pyplot(fig_heat, use_container_width=True)
+
+    st.markdown("#### Cluster feature averages (raw units)")
+    st.caption("Mean value of each clustering feature within each cluster, unstandardized -- a plain-number "
+               "companion to the heatmap above and the z-scored profile blurbs in the cards.")
+    cluster_raw = session_long.set_index("participant")[pl.CLUSTER_METRIC_KEYS].copy()
+    cluster_raw["cluster"] = cluster_probs["assigned_cluster"]
+    cluster_avg_table = cluster_raw.groupby("cluster")[pl.CLUSTER_METRIC_KEYS].mean()
+    cluster_avg_table.insert(0, "n", cluster_raw.groupby("cluster").size())
+    cluster_avg_display = cluster_avg_table.copy()
+    for c in pl.CLUSTER_METRIC_KEYS:
+        cluster_avg_display[c] = cluster_avg_display[c].map(lambda v: "n/a" if pd.isna(v) else f"{v:.2f}")
+    st.dataframe(cluster_avg_display, use_container_width=True)
+
     predicted_groups = cluster_probs["assigned_cluster"].map(cluster_group_lean)
     actual_groups = pd.Series({sid: res["group"] for sid, res in session_results.items()})
     match_results = pd.Series(
@@ -519,6 +555,44 @@ with tab_overview:
 
         with st.expander("Cross-tab: cluster vs. filename group"):
             st.dataframe(crosscheck, use_container_width=True)
+
+        wrong_sessions = [sid for sid in cluster_probs.index if match_results[sid] != True]
+        st.markdown("#### Why the mismatches happened")
+        if not wrong_sessions:
+            st.caption("No mismatches in this pool -- every session's cluster matches its revealed group.")
+        else:
+            st.caption("For each session whose cluster doesn't match its revealed group: the feature(s) "
+                       "pulling it toward its assigned cluster vs. the feature(s) pulling it toward the "
+                       "runner-up cluster, ranked by each feature's log-likelihood under the assigned "
+                       "cluster's fitted distribution vs. the runner-up's. A large negative number in "
+                       "\"favors runner-up\" means that feature alone argued strongly against the cluster "
+                       "the session actually landed in.")
+            for sid in wrong_sessions:
+                explanation = pl.explain_cluster_assignment(gmm, X_ai, cluster_probs, sid)
+                if explanation is None:
+                    continue
+                assigned_lean = cluster_group_lean.get(explanation["assigned_col"], explanation["assigned_col"])
+                runner_lean = cluster_group_lean.get(explanation["runner_up_col"], explanation["runner_up_col"])
+                with st.expander(
+                    f"{sid} -- actual: {actual_groups[sid]}, predicted: {predicted_groups[sid]} "
+                    f"(assigned {explanation['assigned_col']}/{GROUP_DISPLAY_NAMES.get(assigned_lean, assigned_lean)}, "
+                    f"runner-up {explanation['runner_up_col']}/{GROUP_DISPLAY_NAMES.get(runner_lean, runner_lean)})"
+                ):
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        st.markdown(f"**Favors assigned** ({GROUP_DISPLAY_NAMES.get(assigned_lean, assigned_lean)})")
+                        st.dataframe(
+                            explanation["for_assigned"][["feature", "value_z", "loglik_diff"]]
+                            .style.format({"value_z": "{:.2f}", "loglik_diff": "{:.1f}"}),
+                            use_container_width=True, hide_index=True,
+                        )
+                    with ec2:
+                        st.markdown(f"**Favors runner-up** ({GROUP_DISPLAY_NAMES.get(runner_lean, runner_lean)})")
+                        st.dataframe(
+                            explanation["against_assigned"][["feature", "value_z", "loglik_diff"]]
+                            .style.format({"value_z": "{:.2f}", "loglik_diff": "{:.1f}"}),
+                            use_container_width=True, hide_index=True,
+                        )
 
     with st.expander("Session-by-session cluster assignment & full probabilities"):
         table = cluster_probs.copy()
@@ -755,190 +829,6 @@ with tab_compare:
     else:
         st.info("Flip **Reveal filename-derived groups** in the sidebar to see the group-by-group metric "
                 "comparisons and the CSI phase-shift chart.")
-
-
-# ------------------------------------------------------------------
-# CLUSTERING DIAGNOSTICS TAB
-# ------------------------------------------------------------------
-with tab_cluster_diag:
-    st.markdown("### Clustering feature diagnostics")
-    st.caption("The live model's 6 features (see Overview) were originally chosen by their Control-vs-ADHD "
-               "z-gap alone. This tab recomputes that z-gap for every candidate metric across **all three** "
-               "pairwise group contrasts, and checks a fixed alternate feature set against this pool side by "
-               "side with the live model -- without changing anything in Overview. "
-               "Requires **Reveal filename-derived groups** in the sidebar.")
-
-    if not reveal:
-        st.info("Flip **Reveal filename-derived groups** in the sidebar to compute z-gaps and try candidate "
-                "feature sets.")
-    else:
-        session_long_diag = session_long.copy()
-        session_long_diag["group"] = session_long_diag["participant"].map(group_for_crosscheck)
-
-        candidate_keys = pl.METRIC_KEYS + ["adhd_flag_ratio", "autism_flag_ratio"]
-        zgap_df = pl.compute_pairwise_zgaps(session_long_diag, candidate_keys, group_order=GROUP_ORDER)
-
-        if zgap_df.empty:
-            st.warning("Not enough data to compute z-gaps for this pool.")
-        else:
-            zgap_display = zgap_df.copy()
-            zgap_display.insert(
-                1, "in live model",
-                zgap_display["metric"].isin(pl.CLUSTER_METRIC_KEYS).map({True: "check", False: ""}),
-            )
-            gap_cols = [c for c in zgap_display.columns if c not in ("metric", "in live model")]
-            st.dataframe(
-                zgap_display.style.format({c: "{:.2f}" for c in gap_cols})
-                .background_gradient(subset=gap_cols, cmap="Oranges"),
-                use_container_width=True,
-            )
-            top = zgap_df.iloc[0]
-            st.caption(f"**What this shows:** `{top['metric']}` has the largest single-pair separation in this "
-                       f"pool (max z-gap {top['max_gap']:.2f}). The live model's 6 features (marked above) were "
-                       f"picked by the `control_vs_adhd` column alone -- compare it against `control_vs_autistic` "
-                       f"and `adhd_vs_autistic` to see where that may be under- or over-weighting a contrast.")
-
-            st.markdown("#### Candidate feature set")
-            FIXED_CANDIDATE_KEYS = ["BCEA_resting", "HR_resting", "HR_overall", "accuracy", "CVI_active"]
-            chosen = [k for k in FIXED_CANDIDATE_KEYS if k in zgap_df["metric"].values]
-            st.caption("Fixed to the top 5 metrics by max z-gap in the table above: `BCEA_resting`, "
-                       f"`HR_resting`, `HR_overall`, `accuracy`, `CVI_active`. Features: {', '.join(chosen)}.")
-
-            if len(chosen) < 2:
-                st.warning("Not enough of the fixed candidate metrics are available in this pool to fit a model.")
-            else:
-                X_candidate, _ = pl.build_feature_matrix(session_long, metric_keys=chosen)
-                gmm_c, cluster_probs_c, prob_cols_c, n_clusters_c, bic_scores_c = pl.run_clustering(
-                    X_candidate, max_clusters
-                )
-                _, _, crosscheck_c, cluster_group_lean_c = pl.reveal_groups(session_results, cluster_probs_c)
-                predicted_c = cluster_probs_c["assigned_cluster"].map(cluster_group_lean_c)
-                actual_all = pd.Series({sid: res["group"] for sid, res in session_results.items()})
-                match_c = pd.Series(
-                    [pl.match_result(actual_all[sid], predicted_c[sid]) for sid in cluster_probs_c.index],
-                    index=cluster_probs_c.index,
-                )
-                n_correct_c, n_total_c = int((match_c == True).sum()), len(match_c)
-                sizes_c = cluster_probs_c["assigned_cluster"].value_counts().sort_index()
-
-                predicted_live = cluster_probs["assigned_cluster"].map(cluster_group_lean)
-                match_live = pd.Series(
-                    [pl.match_result(actual_all[sid], predicted_live[sid]) for sid in cluster_probs.index],
-                    index=cluster_probs.index,
-                )
-                n_correct_live, n_total_live = int((match_live == True).sum()), len(match_live)
-                sizes_live = cluster_probs["assigned_cluster"].value_counts().sort_index()
-
-                def _model_card(accent, features, k, n_correct, n_total, sizes):
-                    return (
-                        f'<div class="metric-card" style="border-left-color:{accent}">'
-                        f'<div style="font-size:0.72rem;color:{SLATE}">{", ".join(features)}</div>'
-                        f'<div style="display:flex;gap:24px;margin-top:8px">'
-                        f'<div><div style="font-size:0.8rem;color:{SLATE}">k (clusters)</div>'
-                        f'<div style="font-size:1.4rem;font-weight:700;color:{NAVY}">{k}</div></div>'
-                        f'<div><div style="font-size:0.8rem;color:{SLATE}">Exact match</div>'
-                        f'<div style="font-size:1.4rem;font-weight:700;color:{NAVY}">{n_correct}/{n_total}</div></div>'
-                        f'</div>'
-                        f'<div style="font-size:0.8rem;color:{SLATE};margin-top:8px">Cluster sizes</div>'
-                        f'<div style="font-size:0.95rem;color:{NAVY}">{", ".join(str(v) for v in sizes.values)}'
-                        f'{" -- has a 1-member cluster" if sizes.min() <= 1 else ""}</div>'
-                        f'</div>'
-                    )
-
-                col_live, col_candidate = st.columns(2)
-                with col_live:
-                    st.markdown("**Live model** (Overview)")
-                    st.markdown(
-                        _model_card(SLATE, pl.CLUSTER_METRIC_KEYS, n_clusters, n_correct_live, n_total_live, sizes_live),
-                        unsafe_allow_html=True,
-                    )
-                with col_candidate:
-                    st.markdown("**Candidate** (hand-picked)")
-                    accent = (GREEN[0] if n_correct_c > n_correct_live
-                              else AMBER[0] if n_correct_c == n_correct_live else RED[0])
-                    st.markdown(
-                        _model_card(accent, chosen, n_clusters_c, n_correct_c, n_total_c, sizes_c),
-                        unsafe_allow_html=True,
-                    )
-
-                if sizes_c.min() <= 1 or sizes_live.min() <= 1:
-                    st.markdown(
-                        '<div class="caution-box">A cluster with only 1 member has an essentially unestimated '
-                        'covariance in a diagonal-covariance GMM -- its "exact match" is not meaningful '
-                        'validation. Watch the cluster-size lists above, not just the match count.</div>',
-                        unsafe_allow_html=True,
-                    )
-
-                st.markdown("#### Model fit at chosen k")
-                ll_live = gmm.score(X_ai.values) * len(X_ai)
-                ll_c = gmm_c.score(X_candidate.values) * len(X_candidate)
-                fit_table = pd.DataFrame(
-                    {"live": [ll_live, gmm.aic(X_ai.values), gmm.bic(X_ai.values)],
-                     "candidate": [ll_c, gmm_c.aic(X_candidate.values), gmm_c.bic(X_candidate.values)]},
-                    index=["Log-likelihood (total)", "AIC", "BIC"],
-                )
-                st.dataframe(fit_table.style.format("{:.1f}"), use_container_width=True)
-                st.caption("Higher log-likelihood and lower AIC/BIC = a tighter fit for that model's own "
-                           "feature space. **Caveat:** live and candidate are fit on different feature "
-                           "matrices, so this isn't the rigorous like-for-like comparison that BIC-across-k "
-                           "*within one* feature set is (below) -- read it as directional context, not a "
-                           "tie-breaker on its own.")
-
-                with st.expander("BIC by k (live vs. candidate)"):
-                    st.dataframe(
-                        pd.DataFrame({"live": pd.Series(bic_scores), "candidate": pd.Series(bic_scores_c)}),
-                        use_container_width=True,
-                    )
-                    st.caption("Lower BIC = better fit for that k, penalized for model complexity. Only "
-                               "meaningful for comparing k *within* the same feature set (each column), not "
-                               "across the live/candidate columns.")
-
-                st.markdown("#### Candidate cluster pairplot")
-                st.caption("Each point is a session, colored by the candidate model's assigned cluster (n "
-                           "shown in the legend) -- check whether the smaller clusters sit in a visually "
-                           "distinct region for these features, or mostly overlap with the larger ones.")
-                cluster_palette = [GREEN[0], AMBER[0], RED[0], BLUE[0], TEAL, CORAL]
-                cluster_names_c = sorted(cluster_probs_c["assigned_cluster"].unique())
-                color_map = {name: cluster_palette[i % len(cluster_palette)] for i, name in enumerate(cluster_names_c)}
-
-                n_feat = len(chosen)
-                fig_pp, axes_pp = plt.subplots(n_feat, n_feat, figsize=(1.9 * n_feat, 1.9 * n_feat))
-                fig_pp.patch.set_facecolor(CREAM)
-                for i in range(n_feat):
-                    for j in range(n_feat):
-                        ax = axes_pp[i, j]
-                        ax.set_facecolor(CREAM)
-                        if j > i:
-                            ax.axis("off")
-                            continue
-                        fi, fj = chosen[i], chosen[j]
-                        for cname in cluster_names_c:
-                            ids = cluster_probs_c.index[cluster_probs_c["assigned_cluster"] == cname]
-                            if i == j:
-                                ax.hist(X_candidate.loc[ids, fi], bins=6, color=color_map[cname], alpha=0.6)
-                            else:
-                                ax.scatter(X_candidate.loc[ids, fj], X_candidate.loc[ids, fi],
-                                           color=color_map[cname], s=30, edgecolor=CREAM, linewidth=0.4, zorder=3)
-                        ax.set_xticks([])
-                        ax.set_yticks([])
-                        for spine in ax.spines.values():
-                            spine.set_color(PALE)
-                        if j == 0:
-                            ax.set_ylabel(fi, fontsize=7.5, color=NAVY)
-                        if i == n_feat - 1:
-                            ax.set_xlabel(fj, fontsize=7.5, color=NAVY)
-                legend_handles = [
-                    plt.Line2D([0], [0], marker="o", linestyle="", color=color_map[c],
-                               label=f"{c} (n={int((cluster_probs_c['assigned_cluster'] == c).sum())})")
-                    for c in cluster_names_c
-                ]
-                fig_pp.legend(handles=legend_handles, loc="upper right", fontsize=8, frameon=False)
-                plt.tight_layout()
-                st.pyplot(fig_pp, use_container_width=True)
-
-                st.caption("This comparison is scoped to this tab only -- it does not change Overview, Group "
-                           "comparison, or Session detail. Adopting a candidate set means updating "
-                           "`CLUSTER_METRIC_KEYS` in `csi_cvi_pipeline.py`.")
 
 
 # ------------------------------------------------------------------
