@@ -799,22 +799,10 @@ with tab_cluster_diag:
                        f"and `adhd_vs_autistic` to see where that may be under- or over-weighting a contrast.")
 
             st.markdown("#### Candidate feature set")
-            # Autonomic slot: CSI_active vs. CVI_active -- pick whichever has the higher variance of
-            # group means (the more literal "spread across groups" reading), not both. On this pool,
-            # CVI_active's group-mean variance is ~0.041 vs. CSI_active's ~0.015 (matching its higher
-            # max z-gap too: 1.76 vs. 1.35), so CVI_active wins the slot.
-            autonomic_metric = "CVI_active"
-            FIXED_CANDIDATE_KEYS = [
-                "accuracy", "BCEA_resting", "reaction_time",
-                "adhd_flag_ratio", "autism_flag_ratio", autonomic_metric,
-            ]
+            FIXED_CANDIDATE_KEYS = ["BCEA_resting", "HR_resting", "HR_overall", "accuracy", "CVI_active"]
             chosen = [k for k in FIXED_CANDIDATE_KEYS if k in zgap_df["metric"].values]
-            st.caption("A hand-picked 6: `accuracy` (biggest ADHD-vs-Autistic gap), `BCEA_resting` "
-                       "(strongest Autistic-vs-Control tracker), `reaction_time` (standard cognitive-control "
-                       "metric), `adhd_flag_ratio` / `autism_flag_ratio` (the two hidden-flag ratios), and "
-                       "one autonomic metric -- `CSI_active` and `CVI_active` were compared by variance of "
-                       "group means (CVI_active 0.041 vs. CSI_active 0.015) and only the higher one, "
-                       f"`{autonomic_metric}`, is included. Features: {', '.join(chosen)}.")
+            st.caption("Fixed to the top 5 metrics by max z-gap in the table above: `BCEA_resting`, "
+                       f"`HR_resting`, `HR_overall`, `accuracy`, `CVI_active`. Features: {', '.join(chosen)}.")
 
             if len(chosen) < 2:
                 st.warning("Not enough of the fixed candidate metrics are available in this pool to fit a model.")
