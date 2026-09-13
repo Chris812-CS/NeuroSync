@@ -125,7 +125,6 @@ with st.sidebar:
         settle_sec = st.slider("Post-gap settle time (s)", 5.0, 30.0, pl.SETTLE_SEC, 5.0)
     with st.expander("Comparison / clustering", expanded=False):
         rel_tol = st.slider("Within-session flag tolerance", 0.01, 0.10, pl.REL_TOL, 0.01)
-        max_clusters = st.slider("Max clusters tried (BIC)", 2, 6, pl.MAX_CLUSTERS, 1)
 
     reveal = st.toggle("🔓 Reveal filename-derived groups", value=True,
                         help="Mirrors the notebook's final reveal section -- on by default.")
@@ -394,7 +393,7 @@ for pid, warns in parse_warnings.items():
 session_long = pl.build_session_long(session_results)
 annotated_table, z_scores = pl.pool_annotated_table(session_long)
 X_ai, n_missing_ai = pl.build_feature_matrix(session_long)
-gmm, cluster_probs, prob_cols, n_clusters, bic_scores = pl.run_clustering(X_ai, max_clusters)
+gmm, cluster_probs, prob_cols, n_clusters, bic_scores = pl.run_clustering(X_ai, fixed_k=3)
 cluster_profiles = {col: pl.describe_cluster_profile(gmm, X_ai, i) for i, col in enumerate(prob_cols)}
 group_severity_df, group_for_crosscheck, crosscheck, cluster_group_lean = pl.reveal_groups(session_results, cluster_probs)
 
@@ -443,8 +442,9 @@ with tab_overview:
 
     st.markdown("### Unsupervised clustering (blind to filename labels)")
     st.caption(f"The model groups the {len(session_results)} sessions by feature similarity alone -- it never "
-               f"sees filename labels. It settled on **k={n_clusters} clusters** (lowest BIC over "
-               f"k=2..{max_clusters}).")
+               f"sees filename labels. Fixed to **k={n_clusters} clusters** -- BIC alone tends to keep "
+               f"preferring more clusters as k rises on a pool this small (down to clusters of size 1), so "
+               f"k is set deliberately here rather than auto-selected.")
 
     # ---- one card per cluster: n members, group lean (if revealed), top features ----
     GROUP_LEAN_COLORS = {"control": GREEN, "adhd": AMBER, "autistic": RED}
@@ -476,33 +476,37 @@ with tab_overview:
                     unsafe_allow_html=True,
                 )
 
-    st.markdown("#### Feature heatmap (standardized)")
-    st.caption("Each row is a session, each column one of the clustering features (z-scored across the "
-               "pool). Rows are grouped by assigned cluster so within-cluster similarity and between-"
-               "cluster contrast are visible at a glance.")
-    heat_order = cluster_probs.sort_values("assigned_cluster").index
-    heat_df = X_ai.loc[heat_order]
-    fig_heat, ax_heat = plt.subplots(figsize=(6.5, 0.32 * len(heat_df) + 1.2))
-    fig_heat.patch.set_facecolor(CREAM)
-    im = ax_heat.imshow(heat_df.values, aspect="auto", cmap="RdBu_r", vmin=-2, vmax=2)
-    ax_heat.set_xticks(range(len(heat_df.columns)))
-    ax_heat.set_xticklabels(heat_df.columns, rotation=25, ha="right", fontsize=8, color=NAVY)
-    ax_heat.set_yticks(range(len(heat_df)))
-    ax_heat.set_yticklabels(
-        [f"{sid}  ({cluster_probs.loc[sid, 'assigned_cluster']})" for sid in heat_df.index],
-        fontsize=7, color=NAVY,
-    )
-    for spine in ax_heat.spines.values():
-        spine.set_visible(False)
-    cbar = fig_heat.colorbar(im, ax=ax_heat, shrink=0.7)
-    cbar.set_label("z-score", fontsize=8, color=NAVY)
-    cbar.ax.tick_params(labelsize=7)
-    plt.tight_layout()
-    st.pyplot(fig_heat, use_container_width=True)
+    st.markdown("#### Feature separation by group (z-gap)")
+    if not reveal:
+        st.info("Flip **Reveal filename-derived groups** in the sidebar to see how well each candidate "
+                "metric separates the revealed groups.")
+    else:
+        st.caption("Each candidate metric, z-scored across the pool, then compared as the gap between each "
+                   "pair of groups' average z-score. `max_gap` is the largest of the three pairwise gaps, "
+                   "used to rank rows. Checked rows are the features actually in the live model above.")
+        session_long_zgap = session_long.copy()
+        session_long_zgap["group"] = session_long_zgap["participant"].map(group_for_crosscheck)
+        zgap_candidate_keys = pl.METRIC_KEYS + ["adhd_flag_ratio", "autism_flag_ratio"]
+        zgap_df = pl.compute_pairwise_zgaps(session_long_zgap, zgap_candidate_keys, group_order=GROUP_ORDER)
+        if zgap_df.empty:
+            st.warning("Not enough data to compute z-gaps for this pool.")
+        else:
+            zgap_display = zgap_df.copy()
+            zgap_display.insert(
+                1, "in live model",
+                zgap_display["metric"].isin(pl.CLUSTER_METRIC_KEYS).map({True: "check", False: ""}),
+            )
+            gap_cols = [c for c in zgap_display.columns if c not in ("metric", "in live model")]
+            st.dataframe(
+                zgap_display.style.format({c: "{:.2f}" for c in gap_cols}).background_gradient(
+                    subset=gap_cols, cmap="Oranges"
+                ),
+                use_container_width=True,
+            )
 
     st.markdown("#### Cluster feature averages (raw units)")
     st.caption("Mean value of each clustering feature within each cluster, unstandardized -- a plain-number "
-               "companion to the heatmap above and the z-scored profile blurbs in the cards.")
+               "companion to the z-scored profile blurbs in the cards above.")
     cluster_raw = session_long.set_index("participant")[pl.CLUSTER_METRIC_KEYS].copy()
     cluster_raw["cluster"] = cluster_probs["assigned_cluster"]
     cluster_avg_table = cluster_raw.groupby("cluster")[pl.CLUSTER_METRIC_KEYS].mean()
@@ -578,6 +582,22 @@ with tab_overview:
                     f"(assigned {explanation['assigned_col']}/{GROUP_DISPLAY_NAMES.get(assigned_lean, assigned_lean)}, "
                     f"runner-up {explanation['runner_up_col']}/{GROUP_DISPLAY_NAMES.get(runner_lean, runner_lean)})"
                 ):
+                    assigned_name = GROUP_DISPLAY_NAMES.get(assigned_lean, assigned_lean)
+                    runner_name = GROUP_DISPLAY_NAMES.get(runner_lean, runner_lean)
+                    actual_name = GROUP_DISPLAY_NAMES.get(actual_groups[sid], actual_groups[sid])
+                    for_feats = explanation["for_assigned"]["feature"].head(3).tolist()
+                    against_feats = explanation["against_assigned"]["feature"].head(3).tolist()
+                    desc = f"**In plain terms:** {sid} is labeled **{actual_name}**"
+                    if for_feats:
+                        desc += (f", but its **{', '.join(for_feats)}** looked more like the "
+                                 f"**{assigned_name}** sessions in this pool")
+                    if against_feats:
+                        desc += (f", while only its **{', '.join(against_feats)}** leaned toward "
+                                 f"**{runner_name}**")
+                    desc += (f". Because more of its profile matched {assigned_name} than {runner_name}, "
+                             f"that's the cluster the model placed it in.")
+                    st.markdown(desc)
+
                     ec1, ec2 = st.columns(2)
                     with ec1:
                         st.markdown(f"**Favors assigned** ({GROUP_DISPLAY_NAMES.get(assigned_lean, assigned_lean)})")
@@ -604,13 +624,6 @@ with tab_overview:
         st.caption("`confidence` is the model's estimated probability for the assigned cluster; the "
                    "cluster_N columns are the full per-cluster probabilities (rows sum to 1).")
         st.dataframe(table.style.format({"confidence": "{:.0%}"}), use_container_width=True)
-
-    with st.expander("How was k chosen? (BIC)"):
-        if bic_scores:
-            bic_df = pd.DataFrame({"k": list(bic_scores.keys()), "BIC": list(bic_scores.values())})
-            st.bar_chart(bic_df.set_index("k"), color=TEAL)
-        st.caption("Lower BIC = better fit, penalized for model complexity. k is picked automatically as "
-                   f"the lowest-BIC option over k=2..{max_clusters}.")
 
 
 # ------------------------------------------------------------------
