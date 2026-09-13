@@ -571,6 +571,7 @@ with tab_overview:
                        "cluster's fitted distribution vs. the runner-up's. A large negative number in "
                        "\"favors runner-up\" means that feature alone argued strongly against the cluster "
                        "the session actually landed in.")
+            session_long_idx = session_long.set_index("participant")
             for sid in wrong_sessions:
                 explanation = pl.explain_cluster_assignment(gmm, X_ai, cluster_probs, sid)
                 if explanation is None:
@@ -597,6 +598,61 @@ with tab_overview:
                     desc += (f". Because more of its profile matched {assigned_name} than {runner_name}, "
                              f"that's the cluster the model placed it in.")
                     st.markdown(desc)
+
+                    # ---- insight: how does this session compare to its OWN correctly-clustered peers? ----
+                    actual_group = actual_groups[sid]
+                    peers = [
+                        s for s in cluster_probs.index
+                        if actual_groups[s] == actual_group and match_results[s] == True and s != sid
+                    ]
+                    insight_lines = []
+                    sev = session_results[sid].get("severity")
+                    peer_sevs = {session_results[p].get("severity") for p in peers}
+                    if peers:
+                        if sev and sev not in peer_sevs:
+                            insight_lines.append(
+                                f"{sid} is tagged **{sev}** severity, unlike the other {actual_name} sessions "
+                                f"in this pool ({', '.join(peers)}) -- a milder or different presentation "
+                                f"could plausibly look less distinct on these features."
+                            )
+                        elif not sev and not any(peer_sevs):
+                            insight_lines.append(
+                                f"{sid} carries no different severity tag from the other {actual_name} "
+                                f"sessions here ({', '.join(peers)}), so this mismatch isn't explained by a "
+                                f"labeled severity difference -- it reads as a genuine outlier within the "
+                                f"labeled group on these features, not an expected edge case."
+                            )
+
+                    top_feats, seen_feats = [], set()
+                    for feat in (explanation["for_assigned"]["feature"].tolist()
+                                 + explanation["against_assigned"]["feature"].tolist()):
+                        if feat not in seen_feats:
+                            seen_feats.add(feat)
+                            top_feats.append(feat)
+
+                    missing_feats, compare_parts = [], []
+                    for feat in top_feats[:4]:
+                        val = session_long_idx.loc[sid, feat]
+                        if pd.isna(val):
+                            missing_feats.append(feat)
+                        elif peers:
+                            peer_mean = session_long_idx.loc[peers, feat].mean()
+                            compare_parts.append(f"{feat} {val:.2f} vs. {peer_mean:.2f}")
+                    if compare_parts:
+                        insight_lines.append(
+                            f"Against {'/'.join(peers)} -- the correctly-clustered {actual_name} sessions "
+                            f"here -- {sid} differs on: {'; '.join(compare_parts)}."
+                        )
+                    if missing_feats:
+                        insight_lines.append(
+                            f"{', '.join(missing_feats)} {'was' if len(missing_feats) == 1 else 'were'} "
+                            f"missing for {sid} and filled with the pool average, so "
+                            f"{'it' if len(missing_feats) == 1 else 'they'} couldn't meaningfully pull the "
+                            f"session toward either cluster."
+                        )
+
+                    if insight_lines:
+                        st.markdown("**Insight:** " + " ".join(insight_lines))
 
                     ec1, ec2 = st.columns(2)
                     with ec1:
