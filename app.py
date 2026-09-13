@@ -799,14 +799,22 @@ with tab_cluster_diag:
                        f"and `adhd_vs_autistic` to see where that may be under- or over-weighting a contrast.")
 
             st.markdown("#### Candidate feature set")
-            FIXED_CANDIDATE_KEYS = ["BCEA_resting", "accuracy", "BCEA_overall", "adhd_flag_ratio", "autism_flag_ratio"]
+            # Autonomic slot: CSI_active vs. CVI_active -- pick whichever has the higher variance of
+            # group means (the more literal "spread across groups" reading), not both. On this pool,
+            # CVI_active's group-mean variance is ~0.041 vs. CSI_active's ~0.015 (matching its higher
+            # max z-gap too: 1.76 vs. 1.35), so CVI_active wins the slot.
+            autonomic_metric = "CVI_active"
+            FIXED_CANDIDATE_KEYS = [
+                "accuracy", "BCEA_resting", "reaction_time",
+                "adhd_flag_ratio", "autism_flag_ratio", autonomic_metric,
+            ]
             chosen = [k for k in FIXED_CANDIDATE_KEYS if k in zgap_df["metric"].values]
-            st.caption("Fixed to the 5 metrics behind the **Key differences across groups** box on the Group "
-                       "comparison tab -- the metrics with the largest *relative* (%) gap between groups, as "
-                       "opposed to the largest *z-gap* (mean/std) ranking in the table above. The two rankings "
-                       "can disagree when a metric's within-group spread is also large; this candidate tests "
-                       "the relative-gap view against the live model, which was picked by z-gap alone. "
-                       f"Features: {', '.join(chosen)}.")
+            st.caption("A hand-picked 6: `accuracy` (biggest ADHD-vs-Autistic gap), `BCEA_resting` "
+                       "(strongest Autistic-vs-Control tracker), `reaction_time` (standard cognitive-control "
+                       "metric), `adhd_flag_ratio` / `autism_flag_ratio` (the two hidden-flag ratios), and "
+                       "one autonomic metric -- `CSI_active` and `CVI_active` were compared by variance of "
+                       "group means (CVI_active 0.041 vs. CSI_active 0.015) and only the higher one, "
+                       f"`{autonomic_metric}`, is included. Features: {', '.join(chosen)}.")
 
             if len(chosen) < 2:
                 st.warning("Not enough of the fixed candidate metrics are available in this pool to fit a model.")
@@ -857,7 +865,7 @@ with tab_cluster_diag:
                         unsafe_allow_html=True,
                     )
                 with col_candidate:
-                    st.markdown("**Candidate** (relative-gap metrics)")
+                    st.markdown("**Candidate** (hand-picked)")
                     accent = (GREEN[0] if n_correct_c > n_correct_live
                               else AMBER[0] if n_correct_c == n_correct_live else RED[0])
                     st.markdown(
