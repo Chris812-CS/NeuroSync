@@ -637,7 +637,13 @@ with tab_overview:
                             missing_feats.append(feat)
                         elif peers:
                             peer_mean = session_long_idx.loc[peers, feat].mean()
-                            compare_parts.append(f"{feat} {val:.2f} vs. {peer_mean:.2f}")
+                            if peer_mean != 0:
+                                diff_pct = (val - peer_mean) / abs(peer_mean) * 100
+                                direction = "higher" if diff_pct > 0 else "lower"
+                                pct_str = f", {abs(diff_pct):.0f}% {direction}" if round(diff_pct) != 0 else ", about the same"
+                            else:
+                                pct_str = ""
+                            compare_parts.append(f"{feat} {val:.2f} vs. {peer_mean:.2f}{pct_str}")
                     if compare_parts:
                         insight_lines.append(
                             f"Against {'/'.join(peers)} -- the correctly-clustered {actual_name} sessions "
