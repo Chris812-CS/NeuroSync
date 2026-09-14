@@ -396,6 +396,85 @@ X_ai, n_missing_ai = pl.build_feature_matrix(session_long)
 gmm, cluster_probs, prob_cols, n_clusters, bic_scores = pl.run_clustering(X_ai, fixed_k=3)
 cluster_profiles = {col: pl.describe_cluster_profile(gmm, X_ai, i) for i, col in enumerate(prob_cols)}
 group_severity_df, group_for_crosscheck, crosscheck, cluster_group_lean = pl.reveal_groups(session_results, cluster_probs)
+predicted_groups = cluster_probs["assigned_cluster"].map(cluster_group_lean)
+actual_groups = pd.Series({sid: res["group"] for sid, res in session_results.items()})
+match_results = pd.Series(
+    [pl.match_result(actual_groups[sid], predicted_groups[sid]) for sid in cluster_probs.index],
+    index=cluster_probs.index,
+)
+
+
+def render_cluster_insight(sid, explanation, actual_name, session_long_idx, is_mismatch):
+    """Plain-English "why this cluster" insight: severity-tag context (when
+    the session's actual group is known) plus a peer comparison against
+    other sessions correctly clustered into that same actual group, for
+    the top features driving the assignment. Shared by the Overview
+    mismatch list and the Session detail cluster-assignment explanation."""
+    sid_actual_group = actual_groups.get(sid)
+    peers = (
+        [s for s in cluster_probs.index
+         if actual_groups[s] == sid_actual_group and match_results[s] == True and s != sid]
+        if sid_actual_group is not None else []
+    )
+    if not peers:
+        return
+
+    insight_lines = []
+    sev = session_results[sid].get("severity")
+    peer_sevs = {session_results[p].get("severity") for p in peers}
+    if sev and sev not in peer_sevs:
+        tail = (" -- a milder or different presentation could plausibly look less distinct on these features."
+                if is_mismatch else
+                " -- yet its profile still resembled the group closely enough to cluster correctly.")
+        insight_lines.append(
+            f"{sid} is tagged **{sev}** severity, unlike the other {actual_name} sessions "
+            f"in this pool ({', '.join(peers)}){tail}"
+        )
+    elif not sev and not any(peer_sevs) and is_mismatch:
+        insight_lines.append(
+            f"{sid} carries no different severity tag from the other {actual_name} "
+            f"sessions here ({', '.join(peers)}), so this mismatch isn't explained by a "
+            f"labeled severity difference -- it reads as a genuine outlier within the "
+            f"labeled group on these features, not an expected edge case."
+        )
+
+    top_feats, seen_feats = [], set()
+    for feat in (explanation["for_assigned"]["feature"].tolist()
+                 + explanation["against_assigned"]["feature"].tolist()):
+        if feat not in seen_feats:
+            seen_feats.add(feat)
+            top_feats.append(feat)
+
+    missing_feats, compare_parts = [], []
+    for feat in top_feats[:4]:
+        val = session_long_idx.loc[sid, feat]
+        if pd.isna(val):
+            missing_feats.append(feat)
+        else:
+            peer_mean = session_long_idx.loc[peers, feat].mean()
+            if peer_mean != 0:
+                diff_pct = (val - peer_mean) / abs(peer_mean) * 100
+                direction = "higher" if diff_pct > 0 else "lower"
+                pct_str = f", {abs(diff_pct):.0f}% {direction}" if round(diff_pct) != 0 else ", about the same"
+            else:
+                pct_str = ""
+            compare_parts.append(f"{feat} {val:.2f} vs. {peer_mean:.2f}{pct_str}")
+    if compare_parts:
+        insight_lines.append(
+            f"Compared to {'/'.join(peers)} -- the correctly-clustered {actual_name} sessions "
+            f"here -- {sid}: {'; '.join(compare_parts)}."
+        )
+    if missing_feats:
+        insight_lines.append(
+            f"{', '.join(missing_feats)} {'was' if len(missing_feats) == 1 else 'were'} "
+            f"missing for {sid} and filled with the pool average, so "
+            f"{'it' if len(missing_feats) == 1 else 'they'} couldn't meaningfully pull the "
+            f"session toward either cluster."
+        )
+
+    if insight_lines:
+        st.markdown("**Insight:** " + " ".join(insight_lines))
+
 
 st.title("CSI/CVI Unknown-Group Dashboard")
 st.caption(f"{len(session_results)} session(s) loaded · window={window_sec:.0f}s · "
@@ -516,12 +595,6 @@ with tab_overview:
         cluster_avg_display[c] = cluster_avg_display[c].map(lambda v: "n/a" if pd.isna(v) else f"{v:.2f}")
     st.dataframe(cluster_avg_display, use_container_width=True)
 
-    predicted_groups = cluster_probs["assigned_cluster"].map(cluster_group_lean)
-    actual_groups = pd.Series({sid: res["group"] for sid, res in session_results.items()})
-    match_results = pd.Series(
-        [pl.match_result(actual_groups[sid], predicted_groups[sid]) for sid in cluster_probs.index],
-        index=cluster_probs.index,
-    )
     n_correct = int((match_results == True).sum())
     n_partial = int((match_results == "partial").sum())
     n_total = len(match_results)
@@ -598,67 +671,7 @@ with tab_overview:
                     desc += (f". Because more of its profile matched {assigned_name} than {runner_name}, "
                              f"that's the cluster the model placed it in.")
                     st.markdown(desc)
-
-                    # ---- insight: how does this session compare to its OWN correctly-clustered peers? ----
-                    actual_group = actual_groups[sid]
-                    peers = [
-                        s for s in cluster_probs.index
-                        if actual_groups[s] == actual_group and match_results[s] == True and s != sid
-                    ]
-                    insight_lines = []
-                    sev = session_results[sid].get("severity")
-                    peer_sevs = {session_results[p].get("severity") for p in peers}
-                    if peers:
-                        if sev and sev not in peer_sevs:
-                            insight_lines.append(
-                                f"{sid} is tagged **{sev}** severity, unlike the other {actual_name} sessions "
-                                f"in this pool ({', '.join(peers)}) -- a milder or different presentation "
-                                f"could plausibly look less distinct on these features."
-                            )
-                        elif not sev and not any(peer_sevs):
-                            insight_lines.append(
-                                f"{sid} carries no different severity tag from the other {actual_name} "
-                                f"sessions here ({', '.join(peers)}), so this mismatch isn't explained by a "
-                                f"labeled severity difference -- it reads as a genuine outlier within the "
-                                f"labeled group on these features, not an expected edge case."
-                            )
-
-                    top_feats, seen_feats = [], set()
-                    for feat in (explanation["for_assigned"]["feature"].tolist()
-                                 + explanation["against_assigned"]["feature"].tolist()):
-                        if feat not in seen_feats:
-                            seen_feats.add(feat)
-                            top_feats.append(feat)
-
-                    missing_feats, compare_parts = [], []
-                    for feat in top_feats[:4]:
-                        val = session_long_idx.loc[sid, feat]
-                        if pd.isna(val):
-                            missing_feats.append(feat)
-                        elif peers:
-                            peer_mean = session_long_idx.loc[peers, feat].mean()
-                            if peer_mean != 0:
-                                diff_pct = (val - peer_mean) / abs(peer_mean) * 100
-                                direction = "higher" if diff_pct > 0 else "lower"
-                                pct_str = f", {abs(diff_pct):.0f}% {direction}" if round(diff_pct) != 0 else ", about the same"
-                            else:
-                                pct_str = ""
-                            compare_parts.append(f"{feat} {val:.2f} vs. {peer_mean:.2f}{pct_str}")
-                    if compare_parts:
-                        insight_lines.append(
-                            f"Against {'/'.join(peers)} -- the correctly-clustered {actual_name} sessions "
-                            f"here -- {sid} differs on: {'; '.join(compare_parts)}."
-                        )
-                    if missing_feats:
-                        insight_lines.append(
-                            f"{', '.join(missing_feats)} {'was' if len(missing_feats) == 1 else 'were'} "
-                            f"missing for {sid} and filled with the pool average, so "
-                            f"{'it' if len(missing_feats) == 1 else 'they'} couldn't meaningfully pull the "
-                            f"session toward either cluster."
-                        )
-
-                    if insight_lines:
-                        st.markdown("**Insight:** " + " ".join(insight_lines))
+                    render_cluster_insight(sid, explanation, actual_name, session_long_idx, is_mismatch=True)
 
                     ec1, ec2 = st.columns(2)
                     with ec1:
@@ -950,6 +963,12 @@ with tab_session:
                     st.markdown("Pulled the other way (outweighed):")
                     st.dataframe(explanation["against_assigned"][["feature", "value_z", "dist_to_assigned", "dist_to_runner_up"]],
                                  use_container_width=True, hide_index=True)
+
+                if reveal:
+                    actual_name = GROUP_DISPLAY_NAMES.get(actual_groups[sess_id], actual_groups[sess_id])
+                    session_long_idx = session_long.set_index("participant")
+                    render_cluster_insight(sess_id, explanation, actual_name, session_long_idx,
+                                            is_mismatch=match_results[sess_id] != True)
 
     with st.expander("Hypothesis checks (ADHD / Autism pattern flags)"):
         hc1, hc2 = st.columns(2)
